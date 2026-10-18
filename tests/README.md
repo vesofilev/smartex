@@ -19,5 +19,9 @@ URL="http://127.0.0.1:8765/?token=$(cat ~/.smartex_token)"
 ```
 
 ~/.venvs/uitest/bin/python tests/ui_sync.py "$URL" /tmp/shots     # forward/inverse SyncTeX, Cmd-J, zoom
+~/.venvs/uitest/bin/python tests/ui_assistant.py "$URL" /tmp/shots   # Assistant tab: no doubled messages
+
+For the assistant test, start the server with the stand-in Claude so no usage is spent:
+`SMARTEX_CLAUDE=$PWD/tests/fake_claude.py ./smartex.sh start /tmp/scratch-copy-of-a-paper`.
 
 Screenshots land in the output folder.

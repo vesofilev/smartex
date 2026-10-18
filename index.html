@@ -688,7 +688,13 @@ function addEntry(e) {
   else if (e.role === 'result') li.textContent = e.ok ? `Done in ${e.seconds} s` : `Stopped (${e.subtype || 'error'}) after ${e.seconds} s`;
   chat.append(li);
 }
-async function loadAgent() {
+/* Transcript fetches run one at a time and skip entries already shown: a message you send triggers both a
+   direct fetch and an agent_output event, and two overlapping fetches from the same position used to add it twice. */
+let agentQueue = Promise.resolve();
+const serial = fn => (agentQueue = agentQueue.then(fn, fn));
+function loadAgent() { return serial(loadAgentNow); }
+function pullAgent() { return serial(pullAgentNow); }
+async function loadAgentNow() {
   try {
     const info = await api('/api/agent?' + q()); A.status = info.status; A.busy = info.busy; A.model = info.model;
     $('agentmodel').value = info.model_requested || ''; $('agenteffort').value = info.effort || '';
@@ -703,9 +709,9 @@ async function loadAgent() {
     renderAgentState(); scrollChat();
   } catch (e) { /* assistant endpoints unavailable */ }
 }
-async function pullAgent() {
+async function pullAgentNow() {
   const t = await api('/api/agent/transcript?' + q({ since: A.last }));
-  for (const e of t.entries) { addEntry(e); A.last = e.index; }
+  for (const e of t.entries) { if (e.index <= A.last) continue; addEntry(e); A.last = e.index; }
   A.status = t.status; A.busy = t.busy; renderAgentState(); scrollChat();
   if (A.tab !== 'agent' && t.entries.some(e => e.role === 'assistant')) $('agentdot').classList.add('show');
 }
