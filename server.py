@@ -33,8 +33,10 @@ VERSION = '0.2.0'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
-# extra directory searched for latexmk before PATH (a user-space TeX Live, for example)
-TEXBIN = Path(os.environ.get('SMARTEX_TEXBIN', str(Path.home() / 'texlive' / '2026' / 'bin' / 'x86_64-linux')))
+# directories searched for latexmk before PATH: $SMARTEX_TEXBIN, a user-space TeX Live, MacTeX
+TEXBINS = [Path(p) for p in (os.environ.get('SMARTEX_TEXBIN', ''),
+                             str(Path.home() / 'texlive' / '2026' / 'bin' / 'x86_64-linux'),
+                             '/Library/TeX/texbin') if p]
 ERROR_RE = re.compile(r'^(?P<file>[^:\n]+\.(?:tex|sty|cls|bib|bbl)):(?P<line>\d+): (?P<msg>.+)$', re.M)
 WARN_RE = re.compile(r'^((?:LaTeX|Package \S+|Class \S+) Warning: .+?)(?:\n\n|\Z)', re.M | re.S)
 LINE_RE = re.compile(r'on input line (\d+)')
@@ -204,8 +206,7 @@ class Project:
     def compile(self, main, client):
         main_path = self.main_path(main)
         env = dict(os.environ)
-        if TEXBIN.is_dir():
-            env['PATH'] = f'{TEXBIN}:{env.get("PATH", "")}'
+        env['PATH'] = ':'.join([str(b) for b in TEXBINS if b.is_dir()] + [env.get('PATH', '')])
         cmd = ['latexmk', '-pdf', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', main_path.name]
         EVENTS.emit(self.name, 'compile_started', main=self.rel(main_path), client=client)
         t0 = time.time()
