@@ -213,6 +213,11 @@ class Project:
         env = dict(os.environ)
         env['PATH'] = ':'.join([str(b) for b in TEXBINS if b.is_dir()] + [env.get('PATH', '')])
         cmd = ['latexmk', '-pdf', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', main_path.name]
+        # latexmk skips the run when the PDF looks up to date, so a PDF made elsewhere (or without SyncTeX)
+        # would never get the SyncTeX data that cursor-following needs: force a run in that case
+        pdf_now, sync_now = main_path.with_suffix('.pdf'), main_path.with_suffix('.synctex.gz')
+        if pdf_now.exists() and (not sync_now.exists() or sync_now.stat().st_mtime < pdf_now.stat().st_mtime - 2):
+            cmd.insert(1, '-g')
         EVENTS.emit(self.name, 'compile_started', main=self.rel(main_path), client=client)
         t0 = time.time()
         with self.compile_lock:
