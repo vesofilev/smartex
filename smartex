@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""smartex: command-line access to a smartex workspace, for people and AI agents.
+
+Structured results are printed as JSON; file contents, logs and PDF text are printed as plain text.
+Exit status: 0 on success, 1 when the server refuses (the JSON error goes to stderr), 2 on bad usage.
+Configuration: SMARTEX_URL, SMARTEX_TOKEN (or ~/.smartex_token), SMARTEX_CLIENT, SMARTEX_PROJECT.
+
+Examples
+  smartex files
+  smartex cat main.tex --start 40 --end 80 --numbered
+  smartex edit main.tex --old 'vaccum' --new 'vacuum'
+  smartex compile && smartex pdf-page 2 -o page2.png
+  smartex where ernst_chapter.tex 25          # which PDF page shows line 25
+  smartex note introduction.tex 12 "Euler-Lagrange, not Lagrange-Euler"
+  smartex events --since 0 --timeout 30       # wait for changes
+"""
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from smartex_client import Client, SmartexError  # noqa: E402
+
+
+def out(obj):
+    if isinstance(obj, (dict, list)):
+        print(json.dumps(obj, indent=2, ensure_ascii=False))
+    else:
+        sys.stdout.write(obj if obj.endswith('\n') else obj + '\n')
+
+
+def save_binary(data, path):
+    with open(path, 'wb') as f:
+        f.write(data)
+    out({'written': path, 'bytes': len(data)})
+
+
+def main():
+    ap = argparse.ArgumentParser(prog='smartex', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--url'), ap.add_argument('--token'), ap.add_argument('--client'), ap.add_argument('--project')
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    sub.add_parser('help', help='the server\'s endpoint catalogue')
+    sub.add_parser('projects', help='projects being served')
+    sub.add_parser('files', help='editable files with sha, the main file, PDF status')
+    p = sub.add_parser('cat', help='print a file or a line range')
+    p.add_argument('path'), p.add_argument('--start', type=int), p.add_argument('--end', type=int)
+    p.add_argument('--numbered', action='store_true'), p.add_argument('--json', action='store_true', help='include sha and line count')
+    p = sub.add_parser('write', help='replace a file with stdin')
+    p.add_argument('path'), p.add_argument('--base', help='sha you read; refuse if the file changed'), p.add_argument('--force', action='store_true')
+    p = sub.add_parser('edit', help='exact find-and-replace; each --old must occur exactly once')
+    p.add_argument('path'), p.add_argument('--old', action='append', required=True), p.add_argument('--new', action='append', required=True)
+    p.add_argument('--base')
+    p = sub.add_parser('new', help='create a file (content from stdin if piped)')
+    p.add_argument('path')
+    p = sub.add_parser('rename', help='rename a file'); p.add_argument('path'), p.add_argument('to')
+    p = sub.add_parser('delete', help='delete a file (restorable from history)'); p.add_argument('path')
+    p = sub.add_parser('search', help='search all editable files')
+    p.add_argument('query'), p.add_argument('--regex', action='store_true'), p.add_argument('--context', type=int, default=0), p.add_argument('--path')
+    p = sub.add_parser('compile', help='compile; exits 1 if it fails'); p.add_argument('--main')
+    sub.add_parser('errors', help='errors and warnings of the last compile')
+    p = sub.add_parser('log', help='full LaTeX log'); p.add_argument('--tail', type=int)
+    p = sub.add_parser('pdf', help='download the PDF'); p.add_argument('-o', '--output', default='out.pdf')
+    sub.add_parser('pdf-info', help='page count and size of the PDF')
+    p = sub.add_parser('pdf-text', help='text of the PDF or one page'); p.add_argument('--page', type=int)
+    p = sub.add_parser('pdf-page', help='render one page as PNG')
+    p.add_argument('page', type=int), p.add_argument('-o', '--output'), p.add_argument('--dpi', type=int, default=110)
+    p = sub.add_parser('where', help='PDF page and position of a source line'); p.add_argument('path'), p.add_argument('line', type=int)
+    p = sub.add_parser('which', help='source line behind a PDF point'); p.add_argument('page', type=int), p.add_argument('x', type=float), p.add_argument('y', type=float)
+    p = sub.add_parser('history', help='earlier versions of a file'); p.add_argument('path')
+    p = sub.add_parser('version', help='print an earlier version'); p.add_argument('path'), p.add_argument('id')
+    p = sub.add_parser('restore', help='restore an earlier version'); p.add_argument('path'), p.add_argument('id')
+    sub.add_parser('presence', help='what each person and agent is looking at')
+    p = sub.add_parser('open', help='open a file at a line in the people\'s editors')
+    p.add_argument('path'), p.add_argument('line', type=int, nargs='?'), p.add_argument('--message')
+    p = sub.add_parser('notes', help='open review notes'); p.add_argument('path', nargs='?'), p.add_argument('--all', action='store_true')
+    p = sub.add_parser('note', help='add a review note at a line'); p.add_argument('path'), p.add_argument('line', type=int), p.add_argument('text')
+    p = sub.add_parser('resolve', help='resolve a review note'); p.add_argument('id')
+    p = sub.add_parser('events', help='change feed; with --timeout, wait for the next change')
+    p.add_argument('--since', type=int, default=0), p.add_argument('--timeout', type=float, default=0)
+    a = ap.parse_args()
+
+    c = Client(a.url, a.token, a.client, a.project)
+    try:
+        if a.cmd == 'help': out(c.help())
+        elif a.cmd == 'projects': out(c.projects())
+        elif a.cmd == 'files': out(c.files())
+        elif a.cmd == 'cat':
+            r = c.read(a.path, a.start, a.end, a.numbered)
+            out(r if a.json else r['content'])
+        elif a.cmd == 'write': out(c.write(a.path, sys.stdin.read(), a.base, a.force))
+        elif a.cmd == 'edit':
+            if len(a.old) != len(a.new):
+                ap.error('give one --new for every --old')
+            out(c.edit(a.path, [dict(old=o, new=n) for o, n in zip(a.old, a.new)], a.base))
+        elif a.cmd == 'new': out(c.new(a.path, '' if sys.stdin.isatty() else sys.stdin.read()))
+        elif a.cmd == 'rename': out(c.rename(a.path, a.to))
+        elif a.cmd == 'delete': out(c.delete(a.path))
+        elif a.cmd == 'search': out(c.search(a.query, a.regex, a.context, a.path))
+        elif a.cmd == 'compile':
+            r = c.compile(a.main)
+            out(r)
+            return 0 if r['ok'] else 1
+        elif a.cmd == 'errors': out(c.last_compile())
+        elif a.cmd == 'log':
+            text = c.log()
+            out('\n'.join(text.splitlines()[-a.tail:]) if a.tail else text)
+        elif a.cmd == 'pdf': save_binary(c.pdf(), a.output)
+        elif a.cmd == 'pdf-info': out(c.pdf_info())
+        elif a.cmd == 'pdf-text': out(c.pdf_text(a.page))
+        elif a.cmd == 'pdf-page': save_binary(c.pdf_page(a.page, a.dpi), a.output or f'page{a.page}.png')
+        elif a.cmd == 'where': out(c.where(a.path, a.line))
+        elif a.cmd == 'which': out(c.which(a.page, a.x, a.y))
+        elif a.cmd == 'history': out(c.history(a.path))
+        elif a.cmd == 'version': out(c.version(a.path, a.id)['content'])
+        elif a.cmd == 'restore': out(c.restore(a.path, a.id))
+        elif a.cmd == 'presence': out(c.presence())
+        elif a.cmd == 'open': out(c.open_in_editor(a.path, a.line, a.message))
+        elif a.cmd == 'notes': out(c.notes(a.path, a.all))
+        elif a.cmd == 'note': out(c.add_note(a.path, a.line, a.text))
+        elif a.cmd == 'resolve': out(c.resolve_note(a.id))
+        elif a.cmd == 'events': out(c.events(a.since, a.timeout))
+    except SmartexError as e:
+        sys.stderr.write(json.dumps(dict(status=e.status, **e.info), ensure_ascii=False) + '\n')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

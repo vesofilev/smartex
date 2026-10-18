@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.smartex/
+*.aux
+*.log
+*.fls
+*.fdb_latexmk
+*.synctex.gz
