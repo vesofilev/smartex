@@ -6,6 +6,7 @@ assistant without using Claude: it answers every message instantly with a canned
 """
 import json
 import sys
+import time
 import uuid
 
 args = sys.argv[1:]
@@ -21,7 +22,19 @@ for n, line in enumerate(sys.stdin, 1):
     text = msg.get('message', {}).get('content', '')
     text = text if isinstance(text, str) else json.dumps(text)
     question = text.split(']\n\n', 1)[-1]
+    slow = 'slow' in question                      # "slow" questions take a few visible steps
+    steps = [('mcp__smartex__read_file', {'path': 'main.tex', 'start': 1, 'end': 20}, True, '1\t% Working manuscript ...'),
+             ('mcp__smartex__compile', {}, True, '{"ok": true, "pages": 3, "errors": []}'),
+             ('mcp__smartex__view_pdf_page', {'page': 9}, False, '{"status": 404, "error": "page 9 does not exist"}')] if slow else \
+            [('mcp__smartex__list_files', {}, True, '{"files": ["main.tex"], "main": "main.tex"}')]
+    if slow:
+        say({'type': 'assistant', 'message': {'content': [{'type': 'thinking', 'thinking': 'Read the file, compile, then look at the page.'}]}})
+    for k, (name, inp, ok, out) in enumerate(steps):
+        tid = f'toolu_{n}_{k}'
+        say({'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'id': tid, 'name': name, 'input': inp}]}})
+        if slow:
+            time.sleep(1.0)
+        say({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': tid, 'is_error': not ok, 'content': out}]}})
     say({'type': 'assistant', 'message': {'content': [
-        {'type': 'tool_use', 'name': 'mcp__smartex__list_files', 'input': {}},
         {'type': 'text', 'text': f'Reply {n} to: {question}\n\nWith $E = \\sigma\\int ds\\,dy$ and $$c_m = 2(M/\\sigma - 1).$$'}]}})
     say({'type': 'result', 'subtype': 'success', 'is_error': False, 'num_turns': 1, 'duration_ms': 120, 'session_id': sid})

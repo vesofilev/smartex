@@ -161,9 +161,28 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #chat .assistant code { font: 13px "JetBrains Mono", monospace; color: var(--yellow); }
 #chat .assistant pre { font: 12.5px/1.5 "JetBrains Mono", monospace; background: var(--gutter); border: 1px solid var(--edge);
   border-radius: 6px; padding: 8px 10px; overflow: auto; margin: 0 0 7px; }
-#chat .tool { font: 12.5px "JetBrains Mono", monospace; color: var(--faded); }
-#chat .tool b { color: var(--blue); font-weight: 600; }
 #chat .tool_error { font-size: 12.5px; color: var(--red); }
+#chat li.steps details { border-left: 2px solid var(--edge); padding-left: 10px; }
+#chat li.steps details[open] { border-left-color: var(--accent); }
+#chat li.steps summary { cursor: pointer; font-size: 13px; color: var(--chalk-soft); list-style: none; padding: 2px 0; }
+#chat li.steps summary::-webkit-details-marker { display: none; }
+#chat li.steps summary::before { content: "\25B8"; display: inline-block; width: 1em; color: var(--faded); transition: transform .12s; }
+#chat li.steps details[open] summary::before { transform: rotate(90deg); }
+#chat li.steps summary .live { color: var(--accent); }
+#chat li.steps summary .names { font: 12px "JetBrains Mono", monospace; color: var(--faded); }
+#chat li.steps ol { list-style: none; margin: 6px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+#chat .step { font-size: 13px; }
+#chat .step .head { font: 12.5px "JetBrains Mono", monospace; color: var(--chalk-soft); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+#chat .step .head b { color: var(--blue); font-weight: 600; }
+#chat .step .head .st { margin-left: auto; font-family: "Atkinson Hyperlegible", sans-serif; }
+#chat .step .head .st.ok { color: var(--green); } #chat .step .head .st.err { color: var(--red); }
+#chat .step .head .st.run { color: var(--accent); }
+#chat .step pre { font: 11.5px/1.45 "JetBrains Mono", monospace; background: var(--gutter); border: 1px solid var(--edge); border-radius: 6px;
+  padding: 6px 8px; margin: 4px 0 0; max-height: 9.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--chalk-soft); }
+#chat .step pre.err { color: var(--red); }
+#chat .step.thinking { font-style: italic; color: var(--faded); white-space: pre-wrap; }
+#agentstate.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+#agentstate.clickable:hover { color: var(--chalk); }
 #chat .result { font-size: 12px; color: var(--faded); border-top: 1px dashed var(--edge); padding-top: 4px; }
 #composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
 #ask { resize: vertical; min-height: 44px; max-height: 30vh; background: var(--board-2); color: var(--chalk); border: 1px solid var(--edge);
@@ -266,7 +285,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
         <div id="nopdf"><strong>No PDF yet</strong><span>Press Compile to typeset the paper.</span></div></div>
     </div>
     <div id="agentview" role="tabpanel" hidden>
-      <div id="agentbar"><span id="agentstate">Asleep</span>
+      <div id="agentbar"><span id="agentstate" tabindex="0" role="button" aria-label="Assistant status; when it is working, show its steps">Asleep</span>
         <label>Model <select id="agentmodel" title="Model for the assistant (changing it resumes the same conversation)">
           <option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option>
           <option value="haiku">Haiku</option><option value="fable">Fable</option></select></label>
@@ -675,17 +694,70 @@ function renderAgentState() {
   const el = $('agentstate');
   const label = { stopped: 'Asleep: your next message wakes it', starting: 'Waking up',
                   ready: A.model ? `Awake on ${A.model}` : 'Awake' }[A.status] || A.status;
-  el.textContent = A.busy ? 'Working' : label; el.className = A.busy || A.status === 'starting' ? 'busy' : '';
+  const g = A.group;
+  const working = g && g.running ? `Working: ${g.current || 'thinking'} (step ${g.count || 1})` : 'Working';
+  el.textContent = A.busy ? working : label;
+  el.className = (A.busy || A.status === 'starting' ? 'busy' : '') + (A.busy || g ? ' clickable' : '');
+  el.title = A.busy ? 'Show the steps it is running' : '';
   $('agentstop').disabled = A.status === 'stopped';
+}
+function openSteps() {
+  const all = $('chat').querySelectorAll('li.steps details'); const d = all[all.length - 1];
+  if (!d) { toast('No steps yet: the assistant is still reading your message'); return; }
+  d.open = true; d.scrollIntoView({ block: 'nearest' });
+}
+$('agentstate').onclick = () => { if (A.busy || A.group) openSteps(); };
+$('agentstate').onkeydown = ev => { if ((ev.key === 'Enter' || ev.key === ' ') && (A.busy || A.group)) { ev.preventDefault(); openSteps(); } };
+const STEP_ROLES = new Set(['tool', 'tool_result', 'thinking', 'tool_error']);
+function stepGroup() {
+  if (A.group && A.group.li === $('chat').lastElementChild) return A.group;
+  const li = document.createElement('li'); li.className = 'steps';
+  const d = document.createElement('details'); const sum = document.createElement('summary'); const ol = document.createElement('ol');
+  d.append(sum, ol); li.append(d); $('chat').append(li);
+  A.group = { li, d, sum, ol, names: [], count: 0, current: null, running: true, byId: {} };
+  return A.group;
+}
+function renderGroupSummary(g) {
+  g.sum.innerHTML = '';
+  const lead = document.createElement('span');
+  lead.className = g.running ? 'live' : '';
+  lead.textContent = g.running ? `Working, step ${g.count || 1}` : `${g.count} step${g.count === 1 ? '' : 's'}`;
+  const names = document.createElement('span'); names.className = 'names';
+  const uniq = [...new Set(g.names)]; names.textContent = uniq.length ? '  ' + uniq.join(', ') : '';
+  g.sum.append(lead, names);
+}
+function closeGroup() { if (A.group) { A.group.running = false; renderGroupSummary(A.group); A.group = null; } }
+function addStep(e) {
+  const g = stepGroup();
+  if (e.role === 'thinking') {
+    const li = document.createElement('li'); li.className = 'step thinking'; li.textContent = e.text; g.ol.append(li);
+  } else if (e.role === 'tool' || e.role === 'tool_error' && !e.id) {
+    if (e.role === 'tool_error') { const li = document.createElement('li'); li.className = 'step'; li.innerHTML = `<pre class="err">${esc(e.text)}</pre>`; g.ol.append(li); return; }
+    const li = document.createElement('li'); li.className = 'step';
+    const head = document.createElement('div'); head.className = 'head';
+    const b = document.createElement('b'); b.textContent = e.name;
+    const args = document.createElement('span'); args.textContent = Object.values(e.input || {}).join('  ');
+    const st = document.createElement('span'); st.className = 'st run'; st.textContent = 'running';
+    head.append(b, args, st); li.append(head);
+    if (e.detail && e.detail !== '{}') { const pre = document.createElement('pre'); pre.textContent = e.detail; pre.title = 'Input'; li.append(pre); }
+    g.ol.append(li); g.count++; g.names.push(e.name); g.current = e.name;
+    if (e.id) g.byId[e.id] = { li, st };
+  } else if (e.role === 'tool_result') {
+    const t = g.byId[e.id];
+    const target = t ? t.li : g.ol.appendChild(Object.assign(document.createElement('li'), { className: 'step' }));
+    if (t) { t.st.className = 'st ' + (e.ok ? 'ok' : 'err'); t.st.textContent = e.ok ? '\u2713 done' : '\u2717 error'; }
+    if (e.text) { const pre = document.createElement('pre'); pre.textContent = e.text; if (!e.ok) pre.className = 'err'; pre.title = 'Result'; target.append(pre); }
+    g.current = null;
+  }
+  renderGroupSummary(g);
 }
 function addEntry(e) {
   const chat = $('chat'); const empty = chat.querySelector('.empty'); if (empty) empty.remove();
+  if (STEP_ROLES.has(e.role)) { addStep(e); return; }
   const li = document.createElement('li'); li.className = e.role;
-  if (e.role === 'user') { li.innerHTML = richText(e.text) || esc(e.text); if (e.context) { const c = document.createElement('span'); c.className = 'ctx'; c.textContent = e.context.split(';')[0]; li.append(c); } }
-  else if (e.role === 'assistant') li.innerHTML = md(e.text);
-  else if (e.role === 'tool') { const b = document.createElement('b'); b.textContent = e.name; li.append(b, document.createTextNode(' ' + Object.values(e.input || {}).join('  '))); }
-  else if (e.role === 'tool_error') li.textContent = 'Tool error: ' + e.text;
-  else if (e.role === 'result') li.textContent = e.ok ? `Done in ${e.seconds} s` : `Stopped (${e.subtype || 'error'}) after ${e.seconds} s`;
+  if (e.role === 'user') { closeGroup(); li.innerHTML = richText(e.text) || esc(e.text); if (e.context) { const c = document.createElement('span'); c.className = 'ctx'; c.textContent = e.context.split(';')[0]; li.append(c); } }
+  else if (e.role === 'assistant') { if (A.group) { A.group.running = false; renderGroupSummary(A.group); } li.innerHTML = md(e.text); }
+  else if (e.role === 'result') { closeGroup(); li.textContent = e.ok ? `Done in ${e.seconds} s` : `Stopped (${e.subtype || 'error'}) after ${e.seconds} s`; }
   chat.append(li);
 }
 /* Transcript fetches run one at a time and skip entries already shown: a message you send triggers both a
@@ -700,7 +772,7 @@ async function loadAgentNow() {
     $('agentmodel').value = info.model_requested || ''; $('agenteffort').value = info.effort || '';
     if (info.model_requested && $('agentmodel').value !== info.model_requested) {   // a full model name set through the API
       const o = document.createElement('option'); o.value = o.textContent = info.model_requested; $('agentmodel').append(o); $('agentmodel').value = info.model_requested; }
-    $('chat').innerHTML = ''; A.last = -1;
+    $('chat').innerHTML = ''; A.last = -1; A.group = null;
     const t = await api('/api/agent/transcript?' + q({ since: -1 }));
     if (!t.entries.length) { const li = document.createElement('li'); li.className = 'empty';
       li.textContent = info.claude ? 'The assistant is a Claude Code session on the server. It keeps this conversation, sees what you are looking at, and makes its edits through smartex so you can watch and undo them.'
@@ -712,6 +784,7 @@ async function loadAgentNow() {
 async function pullAgentNow() {
   const t = await api('/api/agent/transcript?' + q({ since: A.last }));
   for (const e of t.entries) { if (e.index <= A.last) continue; addEntry(e); A.last = e.index; }
+  if (!t.busy) closeGroup();
   A.status = t.status; A.busy = t.busy; renderAgentState(); scrollChat();
   if (A.tab !== 'agent' && t.entries.some(e => e.role === 'assistant')) $('agentdot').classList.add('show');
 }

@@ -518,20 +518,25 @@ class Agent:
                 self._set(status='ready')
             elif t == 'assistant':
                 for block in m.get('message', {}).get('content', []):
-                    if block.get('type') == 'text' and block.get('text', '').strip():
+                    kind = block.get('type')
+                    if kind == 'text' and block.get('text', '').strip():
                         self._add(role='assistant', text=block['text'])
-                    elif block.get('type') == 'tool_use':
+                    elif kind == 'thinking' and block.get('thinking', '').strip():
+                        self._add(role='thinking', text=block['thinking'][:6000])
+                    elif kind == 'tool_use':
                         name = block.get('name', '').replace('mcp__smartex__', '')
                         args = block.get('input') or {}
                         brief = {k: (v if len(str(v)) < 120 else str(v)[:117] + '...') for k, v in args.items()
-                                 if k in ('path', 'line', 'query', 'page', 'main', 'command', 'id', 'to', 'text', 'pattern')}
-                        self._add(role='tool', name=name, input=brief)
+                                 if k in ('path', 'line', 'query', 'page', 'main', 'command', 'id', 'to', 'text', 'pattern',
+                                          'file_path', 'description')}
+                        detail = json.dumps(args, ensure_ascii=False, indent=1)
+                        self._add(role='tool', name=name, input=brief, id=block.get('id'),
+                                  detail=detail if len(detail) < 3000 else detail[:2990] + ' ...')
             elif t == 'user':
                 for block in (m.get('message', {}).get('content') or []):
-                    if isinstance(block, dict) and block.get('type') == 'tool_result' and block.get('is_error'):
-                        content = block.get('content')
-                        text = content if isinstance(content, str) else json.dumps(content)[:300]
-                        self._add(role='tool_error', text=str(text)[:300])
+                    if isinstance(block, dict) and block.get('type') == 'tool_result':
+                        self._add(role='tool_result', id=block.get('tool_use_id'), ok=not block.get('is_error'),
+                                  text=tool_result_text(block.get('content'))[:2500])
             elif t == 'result':
                 self._add(role='result', ok=not m.get('is_error'), turns=m.get('num_turns'),
                           seconds=round((m.get('duration_ms') or 0) / 1000, 1), subtype=m.get('subtype'))
@@ -549,6 +554,17 @@ class Agent:
 
 
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
+def tool_result_text(content):
+    """Readable text of a tool result (a string, or a list of text and image blocks)."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for c in content or []:
+        if isinstance(c, dict):
+            parts.append(c.get('text', '') if c.get('type') == 'text' else f'[{c.get("type", "item")}]')
+    return '\n'.join(p for p in parts if p)
 
 
 def claude_binary():
@@ -599,7 +615,7 @@ ENDPOINTS = [
     ('POST', '/api/notes/resolve', 'project; body {id}', 'Mark a note as resolved.'),
     ('GET', '/api/agent', 'project', 'State of the assistant: stopped, starting, ready; busy; session id; model.'),
     ('POST', '/api/agent/message', 'project; body {text, context?: bool (default true)}', 'Send a message to the assistant (starts or resumes it). The person\'s current file, line and selection are added unless context is false.'),
-    ('GET', '/api/agent/transcript', 'project, [since=INDEX]', 'The conversation with the assistant: user, assistant, tool, tool_error and result entries.'),
+    ('GET', '/api/agent/transcript', 'project, [since=INDEX]', 'The conversation with the assistant: user, assistant, thinking, tool (with id and full input), tool_result (matching id, ok, text) and result entries.'),
     ('POST', '/api/agent/start', 'project; body {model?}', 'Start (or resume) the assistant process without sending a message.'),
     ('POST', '/api/agent/config', 'project; body {model?, effort?}', 'Choose the model (alias such as opus, sonnet, haiku, fable, or a full name; empty for the default) and effort (low, medium, high, xhigh, max; empty for the default). A running assistant restarts and resumes the conversation.'),
     ('POST', '/api/agent/stop', 'project', 'Stop the assistant process; the conversation is kept and resumes with the next message.'),

@@ -39,6 +39,8 @@ computer. smartex starts one long-running Claude Code process per project in hea
 - **Its changes go through smartex**: Claude Code's own Edit and Write tools are disabled, so every change
   is attributed to `agent:claude`, versioned, and appears live in your editor. By default it comments on
   your text with review notes instead of rewriting it.
+- **You can watch it work**: the status line names the step it is on ("Working: compile (step 3)"); click
+  it, or any "N steps" block in the conversation, to see each step with its input, result and any thinking.
 - **Its tools**: the smartex MCP tools, read-only file access, and the `fr` command from
   [frontier](https://github.com/vesofilev/frontier) for the literature, when installed.
 
