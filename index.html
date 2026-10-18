@@ -45,6 +45,12 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
 button:disabled { opacity: .55; cursor: progress; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 kbd { font: 12px "JetBrains Mono", monospace; opacity: .7; margin-left: 7px; }
+#theme { display: inline-flex; align-items: center; gap: 8px; border-color: transparent; padding-left: 6px; }
+#theme .track { width: 32px; height: 18px; border-radius: 9px; background: var(--edge); position: relative; transition: background .15s; }
+#theme .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--chalk); transition: transform .15s; }
+#theme[aria-checked="true"] .track { background: var(--accent); }
+#theme[aria-checked="true"] .knob { transform: translateX(14px); background: var(--accent-ink); }
+@media (prefers-reduced-motion: reduce) { #theme .track, #theme .knob { transition: none; } }
 
 header { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--edge); }
 .mark { font: 600 16px "JetBrains Mono", monospace; letter-spacing: .02em; display: flex; align-items: center; gap: 9px; }
@@ -56,7 +62,7 @@ header select { border: 1px solid var(--edge); background: var(--board-2); borde
 #savestate { color: var(--chalk-soft); font-size: 14px; white-space: nowrap; }
 
 main { display: grid; grid-template-columns: 220px minmax(260px, var(--split, 1fr)) 8px minmax(260px, 1fr); min-height: 0; }
-aside { border-right: 1px solid var(--edge); overflow: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 4px; }
+aside { border-right: 1px solid var(--edge); overflow: auto; padding: 12px 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 aside h2 { font-size: 13px; font-weight: 700; color: var(--chalk-soft); margin: 10px 16px 4px; }
 aside ul { list-style: none; margin: 0; padding: 0; }
 aside li { padding: 4px 16px; cursor: pointer; font: 13.5px "JetBrains Mono", monospace; white-space: nowrap;
@@ -78,11 +84,13 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 .note-mark { color: var(--pink); cursor: pointer; font-size: 12px; line-height: 1; padding-left: 2px; }
 .cm-note-line { background: rgba(244,166,181,.10); }
 
-#editorpane { display: grid; grid-template-rows: auto 1fr auto auto; min-height: 0; }
+#editorpane { display: grid; grid-template-rows: auto 1fr auto auto; min-height: 0; min-width: 0; overflow: hidden; }
 #banner { display: none; padding: 9px 16px; background: var(--sel); border-bottom: 1px solid var(--edge); font-size: 14px; }
 #banner.show { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 #banner span { flex: 1; min-width: 200px; }
-#editor { min-height: 0; }
+#editor { min-height: 0; min-width: 0; overflow: hidden; position: relative; }
+/* explicit rows: the hidden conflict banner must not shift the others up a row */
+#banner { grid-row: 1; } #editor { grid-row: 2; } #issues { grid-row: 3; } #statusline { grid-row: 4; }
 .CodeMirror { height: 100%; background: transparent; color: var(--chalk); font: 14.5px/1.65 "JetBrains Mono", ui-monospace, monospace; }
 [data-theme="paper"] .CodeMirror { background: var(--board-2); }
 .CodeMirror-gutters { background: var(--gutter); border-right: 1px solid var(--edge); }
@@ -119,14 +127,16 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #splitter::after { content: ""; position: absolute; inset: 0 3px; background: var(--edge); border-radius: 2px; }
 #splitter:hover::after, #splitter.drag::after { background: var(--accent); }
 
-#pdfpane { display: grid; grid-template-rows: auto 1fr; min-height: 0; padding: 10px 16px 16px 8px; gap: 10px; }
+#pdfpane { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; overflow: hidden; padding: 10px 16px 16px 8px; gap: 10px;
+  background-color: var(--board); position: relative; z-index: 1; }
 #tabs { display: flex; gap: 4px; }
 #tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 4px 10px; color: var(--chalk-soft); }
 #tabs button[aria-selected="true"] { color: var(--chalk); border-bottom-color: var(--accent); font-weight: 700; }
 #agentdot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--pink); margin-left: 6px; vertical-align: middle; }
 #agentdot.show { display: inline-block; }
-#paperview { display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; }
-#agentview { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; min-height: 0; }
+#paperview { display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; min-width: 0; }
+#agentview { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; min-height: 0; min-width: 0; }
+#chat li { overflow-wrap: anywhere; }
 #paperview[hidden], #agentview[hidden] { display: none; }
 #agentbar { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--chalk-soft); }
 #agentbar #agentstate { flex: 1; }
@@ -177,8 +187,9 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #toast.show { display: block; }
 
 @media (max-width: 960px) {
-  body { overflow: auto; }
-  main { grid-template-columns: 1fr; grid-template-rows: auto 70vh 0 80vh; }
+  html, body { height: auto; }
+  body { display: block; overflow: auto; }
+  main { grid-template-columns: 1fr; grid-template-rows: auto 70vh 85vh; }
   aside { border-right: 0; border-bottom: 1px solid var(--edge); max-height: 32vh; }
   #splitter { display: none; }
   #pdfpane { padding: 12px 16px; }
@@ -195,7 +206,8 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
   <select id="project" aria-label="Project"></select>
   <span id="current"></span>
   <span id="savestate"></span>
-  <button id="theme" title="Switch between blackboard and paper">Paper</button>
+  <button id="theme" role="switch" aria-checked="true" title="Dark mode on or off">
+    <span class="track" aria-hidden="true"><span class="knob"></span></span>Dark mode</button>
   <button id="save" title="Save the open file">Save<kbd>&#8984;S</kbd></button>
   <button id="compile" class="primary" title="Save all files and compile">Compile<kbd>&#8984;&#9166;</kbd></button>
 </header>
@@ -268,8 +280,15 @@ const q = (extra = {}) => new URLSearchParams({ project: S.project, ...extra }).
 function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
 
 /* theme */
-function setTheme(t) { document.documentElement.dataset.theme = t; $('theme').textContent = t === 'board' ? 'Paper' : 'Blackboard'; store.set('smartex.theme', t); }
-setTheme(store.get('smartex.theme') || 'board');
+/* dark mode = blackboard, light mode = paper; follows the system setting until you choose */
+function setTheme(t, remember = true) {
+  document.documentElement.dataset.theme = t; $('theme').setAttribute('aria-checked', String(t === 'board'));
+  if (remember) store.set('smartex.theme', t);
+}
+const systemDark = () => !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+setTheme(store.get('smartex.theme') || (systemDark() ? 'board' : 'paper'), false);
+if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (!store.get('smartex.theme')) setTheme(systemDark() ? 'board' : 'paper', false); });
 setTimeout(() => showTab(store.get('smartex.tab') === 'agent' ? 'agent' : 'paper'), 0);
 $('theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'board' ? 'paper' : 'board');
 
@@ -304,7 +323,7 @@ function renderState() {
   $('savestate').textContent = anyDirty() ? 'Unsaved changes' : (S.current ? 'All changes saved' : '');
   for (const li of $('files').children) {
     li.classList.toggle('active', li.dataset.path === S.current);
-    li.classList.toggle('dirty', dirty(S.docs.get(li.dataset.path)));
+    li.classList.toggle('dirty', !!dirty(S.docs.get(li.dataset.path)));   // !! : toggle(name, undefined) would flip it
   }
   const text = editor.getValue().replace(/%.*$/gm, '').replace(/\\[a-zA-Z]+\*?/g, ' ').replace(/\$[^$]*\$/g, ' ');
   const n = (text.match(/[A-Za-zÀ-ɏ]+(?:['-][A-Za-z]+)*/g) || []).length;
@@ -350,7 +369,7 @@ async function switchProject(name) {
 
 async function refreshFiles() {
   const r = await api('/api/files?' + q());
-  S.files = r.files; S.main = r.main; S.hasPdf = r.pdf;
+  S.files = r.files.map(f => typeof f === 'string' ? f : f.path); S.main = r.main; S.hasPdf = r.pdf;
   const ul = $('files'); ul.innerHTML = '';
   for (const f of S.files) {
     const li = document.createElement('li'); li.textContent = f; li.dataset.path = f; li.tabIndex = 0;
@@ -374,6 +393,7 @@ async function openFile(path, line) {
     const h = editor.addLineClass(l, 'background', 'flash'); setTimeout(() => editor.removeLineClass(h, 'background', 'flash'), 1500);
   }
   editor.focus(); renderState(); renderOutline(); renderNoteMarks();
+  const c = editor.getCursor(); $('pos').textContent = `Line ${c.line + 1}, column ${c.ch + 1}`;
 }
 
 /* saving and conflicts */
