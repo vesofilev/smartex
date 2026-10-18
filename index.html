@@ -178,10 +178,23 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #strip .result { font-weight: 700; }
 #strip.ok .result { color: var(--green); } #strip.err .result { color: var(--red); }
 #strip #detail { color: var(--chalk-soft); }
-#sheet { position: relative; min-height: 0; background: #fff; border-radius: 3px; box-shadow: var(--sheet-shadow); overflow: hidden; }
-#pdf { width: 100%; height: 100%; border: 0; display: block; }
-#nopdf { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: #536679; padding: 24px; gap: 6px; }
-#nopdf strong { color: #13263a; font-size: 17px; }
+#sheet { position: relative; min-height: 0; overflow: auto; padding: 2px 4px 24px; scroll-behavior: auto; }
+#pages { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.page { position: relative; background: #fff; border-radius: 2px; box-shadow: var(--sheet-shadow); cursor: crosshair; max-width: none; }
+.page img { display: block; width: 100%; height: 100%; }
+.page .num { position: absolute; right: 8px; bottom: 6px; font: 11px "JetBrains Mono", monospace; color: #8796a5; }
+.page .marker { position: absolute; left: -6px; right: -6px; height: 0; border-top: 3px solid var(--accent); opacity: 0;
+  box-shadow: 0 0 0 5px rgba(242,212,120,.28); transition: opacity .35s; pointer-events: none; }
+[data-theme="paper"] .page .marker { box-shadow: 0 0 0 5px rgba(36,87,166,.2); }
+.page .marker.show { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .page .marker { transition: none; } }
+#nopdf { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: var(--chalk-soft); padding: 24px; gap: 6px; }
+#nopdf strong { color: var(--chalk); font-size: 17px; }
+#strip .tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+#strip .tools button, #strip .tools a { font-size: 13px; padding: 2px 9px; color: var(--chalk-soft); border: 1px solid var(--edge); border-radius: 7px;
+  text-decoration: none; background: transparent; cursor: pointer; }
+#strip .tools button:hover, #strip .tools a:hover { color: var(--chalk); border-color: var(--chalk-soft); }
+#zoomlevel { font: 12px "JetBrains Mono", monospace; color: var(--faded); min-width: 3.5em; text-align: center; }
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--chalk); color: var(--board);
   padding: 9px 15px; border-radius: 7px; font-size: 14px; display: none; max-width: 90vw; box-shadow: var(--sheet-shadow); }
 #toast.show { display: block; }
@@ -235,8 +248,14 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
       <button role="tab" id="tab-agent" aria-selected="false" aria-controls="agentview">Assistant<span id="agentdot"></span></button>
     </div>
     <div id="paperview" role="tabpanel">
-      <div id="strip"><span class="result" id="result">Not compiled yet</span><span id="detail"></span></div>
-      <div id="sheet"><iframe id="pdf" title="Compiled PDF"></iframe>
+      <div id="strip"><span class="result" id="result">Not compiled yet</span><span id="detail"></span>
+        <span class="tools">
+          <button id="sync" title="Scroll the paper to the cursor's position in the source (Cmd/Ctrl J)">Find cursor</button>
+          <button id="zoomout" title="Zoom out" aria-label="Zoom out">&minus;</button><span id="zoomlevel">100%</span>
+          <button id="zoomin" title="Zoom in" aria-label="Zoom in">+</button>
+          <a id="openpdf" target="_blank" rel="noopener" title="Open the PDF in your browser's own viewer, for searching and selecting text">Open PDF</a>
+        </span></div>
+      <div id="sheet" aria-label="Compiled paper; click a spot to jump to its source line"><div id="pages"></div>
         <div id="nopdf"><strong>No PDF yet</strong><span>Press Compile to typeset the paper.</span></div></div>
     </div>
     <div id="agentview" role="tabpanel" hidden>
@@ -296,7 +315,8 @@ $('theme').onclick = () => setTheme(document.documentElement.dataset.theme === '
 const editor = CodeMirror($('editor'), {
   lineNumbers: true, lineWrapping: true, matchBrackets: true, styleActiveLine: true, indentUnit: 2,
   gutters: ['CodeMirror-linenumbers', 'notes'],
-  extraKeys: { 'Cmd-S': () => save(), 'Ctrl-S': () => save(), 'Cmd-Enter': () => compile(), 'Ctrl-Enter': () => compile(), 'Alt-G': 'jumpToLine' },
+  extraKeys: { 'Cmd-S': () => save(), 'Ctrl-S': () => save(), 'Cmd-Enter': () => compile(), 'Ctrl-Enter': () => compile(), 'Alt-G': 'jumpToLine',
+               'Cmd-J': () => { showTab('paper'); showCursorInPdf(); }, 'Ctrl-J': () => { showTab('paper'); showCursorInPdf(); } },
 });
 let outlineTimer;
 editor.on('change', () => { renderState(); clearTimeout(outlineTimer); outlineTimer = setTimeout(renderOutline, 350); });
@@ -437,11 +457,63 @@ async function poll() {
 }
 setInterval(poll, 4000);
 
-/* compile and preview */
-function showPdf(exists) {
-  $('nopdf').style.display = exists ? 'none' : 'grid';
-  if (exists) $('pdf').src = '/api/pdf?' + q({ main: S.main, token, t: Date.now() }) + '#view=FitH';
+/* compile and preview: server-rendered pages with forward (source -> PDF) and inverse (PDF -> source) search */
+const P = { info: null, zoom: parseFloat(store.get('smartex.zoom')) || 1 };
+async function loadPages() {
+  let info;
+  try { info = await api('/api/pdf/info?' + q({ main: S.main })); }
+  catch (e) { P.info = null; $('pages').innerHTML = ''; $('nopdf').style.display = 'grid'; return false; }
+  $('nopdf').style.display = 'none';
+  const box = $('sheet'), prevTop = box.scrollTop, prevH = box.scrollHeight;
+  const sizes = info.sizes && info.sizes.length ? info.sizes : Array.from({ length: info.pages }, () => [612, 792]);
+  P.info = { ...info, sizes };
+  const width = Math.max(200, box.clientWidth - 12) * P.zoom, dpr = window.devicePixelRatio || 1;
+  const frag = document.createDocumentFragment();
+  sizes.forEach(([w, h], i) => {
+    const div = document.createElement('div'); div.className = 'page'; div.dataset.page = i + 1;
+    div.style.width = `${Math.round(width)}px`; div.style.height = `${Math.round(width * h / w)}px`;
+    const img = document.createElement('img'); img.alt = `Page ${i + 1}`; img.loading = 'lazy'; img.draggable = false;
+    const dpi = Math.max(60, Math.min(240, Math.round(width * dpr * 72 / w)));
+    img.src = '/api/pdf/page?' + q({ main: S.main, page: i + 1, dpi, token, v: info.mtime });
+    const num = document.createElement('span'); num.className = 'num'; num.textContent = i + 1;
+    const mk = document.createElement('div'); mk.className = 'marker';
+    div.append(img, num, mk);
+    div.addEventListener('click', ev => pdfToSource(ev, div, i + 1, w, h));
+    frag.append(div);
+  });
+  $('pages').replaceChildren(frag);
+  if (prevH > box.clientHeight) box.scrollTop = prevTop * (box.scrollHeight / prevH);   // keep the reader's place
+  $('openpdf').href = '/api/pdf?' + q({ main: S.main, token, v: info.mtime });
+  $('zoomlevel').textContent = `${Math.round(P.zoom * 100)}%`;
+  return true;
 }
+async function showCursorInPdf(quiet) {
+  if (!P.info || !S.current || !/\.tex$/.test(S.current)) { if (!quiet) toast('Open a .tex file of the document to find the cursor in the PDF'); return false; }
+  const line = editor.getCursor().line + 1;
+  let r;
+  try { r = await api('/api/synctex/view?' + q({ path: S.current, line, main: S.main })); }
+  catch (e) { if (!quiet) toast(e.status === 404 ? `${S.current} is not part of the compiled document` : 'Could not locate the cursor: ' + e.message); return false; }
+  const div = $('pages').querySelector(`.page[data-page="${r.page}"]`); if (!div) return false;
+  const [, h] = P.info.sizes[r.page - 1];
+  const frac = Math.min(Math.max(r.y / h, 0), 1), box = $('sheet');
+  box.scrollTop = Math.max(0, div.offsetTop + frac * div.offsetHeight - box.clientHeight * 0.3);
+  const mk = div.querySelector('.marker'); mk.style.top = `${frac * 100}%`;
+  mk.classList.add('show'); clearTimeout(mk._t); mk._t = setTimeout(() => mk.classList.remove('show'), 1800);
+  return true;
+}
+async function pdfToSource(ev, div, page, w, h) {
+  const rect = div.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) / rect.width * w, y = (ev.clientY - rect.top) / rect.height * h;
+  try {
+    const r = await api('/api/synctex/edit?' + q({ page, x: x.toFixed(1), y: y.toFixed(1), main: S.main }));
+    if (S.files.includes(r.path)) await openFile(r.path, r.line); else toast(`That text comes from ${r.path}, line ${r.line}`);
+  } catch (e) { toast('No source line found for that spot'); }
+}
+function setZoom(z) { P.zoom = Math.min(3, Math.max(0.5, Math.round(z * 10) / 10)); store.set('smartex.zoom', P.zoom); loadPages(); }
+$('zoomin').onclick = () => setZoom(P.zoom + 0.1); $('zoomout').onclick = () => setZoom(P.zoom - 0.1);
+$('sync').onclick = () => { if (A.tab !== 'paper') showTab('paper'); showCursorInPdf(); };
+let resizeTimer; window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(loadPages, 350); });
+function showPdf(exists) { if (exists) loadPages(); else { $('pages').innerHTML = ''; $('nopdf').style.display = 'grid'; } }
 async function compile() {
   if (S.compiling) return;
   if (!(await saveAll())) { toast('Resolve the file conflict before compiling', 4000); return; }
@@ -460,7 +532,7 @@ function showCompile(r, by) {
   $('result').textContent = r.ok ? 'Compiled' : (nE ? `Compile failed with ${nE} error${nE > 1 ? 's' : ''}` : 'Compile failed');
   $('detail').textContent = `in ${r.seconds} s` + (nW ? `, ${nW} warning${nW > 1 ? 's' : ''}` : '') + (by ? `, started by ${by}` : '');
   renderIssues(r);
-  if (r.pdf) showPdf(true);
+  if (r.pdf) loadPages().then(ok => { if (ok && !by) showCursorInPdf(true); });   // an agent's compile keeps your place
 }
 function renderIssues(r) {
   const ul = $('issuelist'); ul.innerHTML = '';
@@ -614,14 +686,14 @@ $('agentnew').onclick = async () => { if (!confirm('Start a new conversation? Th
   const apply = frac => { main.style.setProperty('--split', `${frac}fr`); store.set('smartex.split', frac); editor.refresh(); };
   const saved = parseFloat(store.get('smartex.split')); if (saved > 0) apply(saved);
   let drag = false;
-  sp.addEventListener('pointerdown', ev => { drag = true; sp.classList.add('drag'); sp.setPointerCapture(ev.pointerId); $('pdf').style.pointerEvents = 'none'; });
+  sp.addEventListener('pointerdown', ev => { drag = true; sp.classList.add('drag'); sp.setPointerCapture(ev.pointerId); });
   sp.addEventListener('pointermove', ev => {
     if (!drag) return;
     const rect = main.getBoundingClientRect(), side = 220, total = rect.width - side - 8;
     const left = Math.min(Math.max(ev.clientX - rect.left - side, 260), total - 260);
     apply(+(left / (total - left)).toFixed(3));
   });
-  sp.addEventListener('pointerup', ev => { drag = false; sp.classList.remove('drag'); $('pdf').style.pointerEvents = ''; });
+  sp.addEventListener('pointerup', ev => { if (drag) loadPages(); drag = false; sp.classList.remove('drag'); });
   sp.addEventListener('keydown', ev => {
     const cur = parseFloat(getComputedStyle(main).getPropertyValue('--split')) || 1;
     if (ev.key === 'ArrowLeft') apply(Math.max(0.3, cur - 0.1)); if (ev.key === 'ArrowRight') apply(Math.min(3, cur + 0.1));
@@ -641,6 +713,7 @@ document.addEventListener('keydown', ev => {
   const mod = ev.metaKey || ev.ctrlKey;
   if (mod && ev.key === 's') { ev.preventDefault(); save(); }
   if (mod && ev.key === 'Enter') { ev.preventDefault(); compile(); }
+  if (mod && (ev.key === 'j' || ev.key === 'J')) { ev.preventDefault(); if (A.tab !== 'paper') showTab('paper'); showCursorInPdf(); }
 });
 window.addEventListener('beforeunload', ev => { if (anyDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
 

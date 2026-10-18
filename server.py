@@ -269,10 +269,30 @@ def pdf_pages(pdf):
     return len(re.findall(rb'/Type\s*/Page[^s]', pdf.read_bytes()))
 
 
+def pdf_page_sizes(pdf):
+    """Page sizes in PostScript points, [(width, height), ...]; empty if pdfinfo is missing."""
+    if not shutil.which('pdfinfo'):
+        return []
+    n = pdf_pages(pdf)
+    out = subprocess.run(['pdfinfo', '-f', '1', '-l', str(n), str(pdf)], capture_output=True, text=True).stdout
+    return [(float(w), float(h)) for w, h in re.findall(r'^Page\s+\d+\s+size:\s+([\d.]+) x ([\d.]+)', out, re.M)]
+
+
+_PAGE_CACHE, _SYNC_CACHE = {}, {}
+
+
 def synctex_records(project, main_path):
     f = main_path.with_suffix('.synctex.gz')
     if not f.exists():
         raise ApiError(404, 'no SyncTeX data yet: compile first')
+    key = (str(f), f.stat().st_mtime_ns)
+    if key not in _SYNC_CACHE:
+        _SYNC_CACHE.clear()
+        _SYNC_CACHE[key] = _parse_synctex(project, main_path, f)
+    return _SYNC_CACHE[key]
+
+
+def _parse_synctex(project, main_path, f):
     inputs, records, page, unit, xo, yo = {}, [], 0, 1.0, 0, 0
     for line in gzip.open(f, 'rt', errors='replace'):
         c = line[:1]
@@ -511,7 +531,7 @@ ENDPOINTS = [
     ('GET', '/api/compile/last', 'project', 'The most recent compile result (from anyone).'),
     ('GET', '/api/log', 'project, [main]', 'Full LaTeX log of the main file.'),
     ('GET', '/api/pdf', 'project, [main]', 'The compiled PDF (application/pdf).'),
-    ('GET', '/api/pdf/info', 'project, [main]', 'Pages, size and modification time of the PDF.'),
+    ('GET', '/api/pdf/info', 'project, [main]', 'Page count, page sizes in points, file size and modification time of the PDF.'),
     ('GET', '/api/pdf/text', 'project, [page], [main]', 'Text of the PDF or one page (needs pdftotext).'),
     ('GET', '/api/pdf/page', 'project, page, [dpi=110], [main]', 'One page rendered as PNG, for agents that can see images (needs pdftoppm).'),
     ('GET', '/api/synctex/view', 'project, path, line', 'Where a source line appears in the PDF: page and position in points from the top left (approximate).'),
@@ -751,7 +771,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def get_api_pdf_info(self, q):
         pdf = self._pdf(q)
         st = pdf.stat()
-        self.send(200, dict(pages=pdf_pages(pdf), bytes=st.st_size, mtime=int(st.st_mtime)))
+        self.send(200, dict(pages=pdf_pages(pdf), sizes=pdf_page_sizes(pdf), bytes=st.st_size, mtime=st.st_mtime_ns // 1000000))
 
     def get_api_pdf_text(self, q):
         pdf = self._pdf(q)
@@ -769,13 +789,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not shutil.which('pdftoppm'):
             raise ApiError(501, 'pdftoppm is not installed on the server')
         page, dpi = int(self.arg(q, 'page', 1)), max(30, min(int(self.arg(q, 'dpi', 110)), 300))
+        key = (str(pdf), pdf.stat().st_mtime_ns, page, dpi)
+        if key in _PAGE_CACHE:
+            return self.send(200, _PAGE_CACHE[key], 'image/png')
         with tempfile.TemporaryDirectory() as d:
             subprocess.run(['pdftoppm', '-f', str(page), '-l', str(page), '-r', str(dpi), '-png', '-singlefile',
                             str(pdf), os.path.join(d, 'page')], check=True, timeout=60)
             png = Path(d, 'page.png')
             if not png.exists():
                 raise ApiError(404, f'page {page} does not exist')
-            self.send(200, png.read_bytes(), 'image/png')
+            data = png.read_bytes()
+        if len(_PAGE_CACHE) > 120:
+            _PAGE_CACHE.clear()
+        _PAGE_CACHE[key] = data
+        self.send(200, data, 'image/png')
 
     def get_api_synctex_view(self, q):
         p = self.project(q)

@@ -13,7 +13,9 @@ small fraction of the memory an IDE needs.
 
 For people (browser):
 - Edit `.tex`, `.bib`, `.sty`, `.cls`, `.md` files with LaTeX highlighting, search and a section outline
-- Compile with latexmk and see the PDF next to the source; click an error to jump to its line
+- Compile with latexmk and see the paper next to the source; click an error to jump to its line
+- After each compile the paper scrolls to where your cursor is (SyncTeX); Cmd/Ctrl-J does it on demand,
+  and clicking a spot on the paper jumps to its source line
 - Two themes: a blackboard and a light paper theme
 - See agent changes as they happen: open files reload, review notes appear in the margin
 

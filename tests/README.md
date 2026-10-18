@@ -18,5 +18,6 @@ URL="http://127.0.0.1:8765/?token=$(cat ~/.smartex_token)"
 ~/.venvs/uitest/bin/python tests/ui_interactions.py "$URL" /tmp/shots ./smartex
 ```
 
-Screenshots land in the output folder. Headless Chromium cannot display PDFs, so the paper preview stays
-blank in the screenshots; that is a limitation of the test browser, not of smartex.
+~/.venvs/uitest/bin/python tests/ui_sync.py "$URL" /tmp/shots     # forward/inverse SyncTeX, Cmd-J, zoom
+
+Screenshots land in the output folder.
