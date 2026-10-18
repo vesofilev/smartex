@@ -21,6 +21,14 @@ def check_layout(pg, label):
     if r['probeInEditor']: problems.append(f'{label}: editor content is drawn over the right pane ({r["probe"]})')
     if any('[object' in f for f in r['files']): problems.append(f'{label}: file list shows {r["files"][:2]}')
     if r['docW'] > r['winW'] + 1: problems.append(f'{label}: page scrolls horizontally ({r["docW"]}px wide in a {r["winW"]}px window)')
+    # nothing inside the right-hand pane may be wider than the pane or cut off at its edge
+    cut = pg.evaluate("""() => { const pane = document.querySelector('#pdfpane').getBoundingClientRect(); const out = [];
+      for (const v of ['#paperview', '#agentview']) { const e = document.querySelector(v); if (!e || e.hidden) continue;
+        if (e.scrollWidth > e.clientWidth + 1) out.push(`${v} content is ${e.scrollWidth}px wide in ${e.clientWidth}px`);
+        for (const c of e.querySelectorAll('button, select, textarea, a')) { const b = c.getBoundingClientRect();
+          if (b.width && (b.right > pane.right + 1 || b.left < pane.left - 1)) out.push(`${(c.id || c.textContent.trim()).slice(0, 24)} is cut off`); } }
+      return out; }""")
+    for c in cut: problems.append(f'{label}: {c}')
     return r
 
 with sync_playwright() as p:

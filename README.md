@@ -42,6 +42,10 @@ computer. smartex starts one long-running Claude Code process per project in hea
 - **Its tools**: the smartex MCP tools, read-only file access, and the `fr` command from
   [frontier](https://github.com/vesofilev/frontier) for the literature, when installed.
 
+Choose the **model** (Opus, Sonnet, Haiku, Fable, or Claude Code's default) and the **effort** (low to max)
+from the menus in the Assistant tab; a change restarts the assistant and keeps the conversation. Formulas
+in the conversation are typeset with KaTeX.
+
 It needs Claude Code installed and logged in on the server (`SMARTEX_CLAUDE` sets the path if `claude` is
 not on `PATH`). It uses that login, that is, the Claude subscription of the account the server runs
 under; an `ANTHROPIC_API_KEY` in the environment is ignored.

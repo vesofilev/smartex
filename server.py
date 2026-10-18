@@ -216,7 +216,8 @@ class Project:
         # latexmk skips the run when the PDF looks up to date, so a PDF made elsewhere (or without SyncTeX)
         # would never get the SyncTeX data that cursor-following needs: force a run in that case
         pdf_now, sync_now = main_path.with_suffix('.pdf'), main_path.with_suffix('.synctex.gz')
-        if pdf_now.exists() and (not sync_now.exists() or sync_now.stat().st_mtime < pdf_now.stat().st_mtime - 2):
+        if pdf_now.exists() and (not sync_now.exists() or sync_now.stat().st_mtime < pdf_now.stat().st_mtime - 2
+                                 or not synctex_matches_folder(sync_now, main_path.parent)):
             cmd.insert(1, '-g')
         EVENTS.emit(self.name, 'compile_started', main=self.rel(main_path), client=client)
         t0 = time.time()
@@ -286,6 +287,23 @@ def pdf_page_sizes(pdf):
 _PAGE_CACHE, _SYNC_CACHE = {}, {}
 
 
+def synctex_matches_folder(sync, folder):
+    """False when the SyncTeX data was written for files in another folder (a moved or copied project)."""
+    try:
+        with gzip.open(sync, 'rt', errors='replace') as f:
+            for _ in range(50):
+                line = f.readline()
+                if line.startswith('Input:'):
+                    path = line.rstrip('\n').split(':', 2)[2]
+                    if not os.path.isabs(path):
+                        return True
+                    p = Path(os.path.normpath(path))
+                    return p.parent == folder.resolve() or folder.resolve() in p.parents
+    except (OSError, EOFError):
+        return False
+    return True
+
+
 def synctex_records(project, main_path):
     f = main_path.with_suffix('.synctex.gz')
     if not f.exists():
@@ -351,7 +369,10 @@ class Agent:
         self.entries = []
         self.stderr_tail = []
         state = self._load_state()
-        self.session_id, self.model = state.get('session_id'), state.get('model')
+        # requested settings ('' = Claude Code's own default) and the model Claude Code reports it is running
+        self.session_id = state.get('session_id')
+        self.model_req, self.effort = state.get('model_req', ''), state.get('effort', '')
+        self.model = None
         tf = self.dir / 'transcript.jsonl'
         if tf.exists():
             self.entries = [json.loads(l) for l in tf.read_text().splitlines() if l.strip()][-500:]
@@ -363,7 +384,8 @@ class Agent:
 
     def _save_state(self):
         self.dir.mkdir(parents=True, exist_ok=True)
-        (self.dir / 'state.json').write_text(json.dumps(dict(session_id=self.session_id, model=self.model)))
+        (self.dir / 'state.json').write_text(json.dumps(dict(session_id=self.session_id, model_req=self.model_req,
+                                                             effort=self.effort)))
 
     def _add(self, **entry):
         with self.lock:
@@ -386,6 +408,7 @@ class Agent:
 
     def info(self):
         return dict(status=self.status, busy=self.busy, session_id=self.session_id, model=self.model,
+                    model_requested=self.model_req, effort=self.effort, efforts=list(EFFORTS),
                     pid=self.proc.pid if self.running() else None, error=self.error, entries=len(self.entries),
                     claude=claude_binary() or None)
 
@@ -393,6 +416,25 @@ class Agent:
         return self.proc is not None and self.proc.poll() is None
 
     # ---- process ----
+    def configure(self, model=None, effort=None):
+        """Choose the model and effort; a running assistant restarts with them and resumes the conversation."""
+        if model is not None and not re.fullmatch(r'[A-Za-z0-9._\[\]-]{0,64}', model):
+            raise ApiError(400, f'invalid model name {model!r}')
+        if effort is not None and effort not in ('',) + EFFORTS:
+            raise ApiError(400, f'effort must be one of {", ".join(EFFORTS)} (or empty for the default)')
+        with self.lock:
+            if self.busy:
+                raise ApiError(409, 'the assistant is working; wait until it finishes or press Stop, then change settings')
+            changed = (model is not None and model != self.model_req) or (effort is not None and effort != self.effort)
+            if model is not None:
+                self.model_req = model
+            if effort is not None:
+                self.effort = effort
+            self._save_state()
+            if changed and self.running():
+                self.stop()
+                self.start()
+
     def start(self, model=None):
         with self.lock:
             if self.running():
@@ -401,7 +443,7 @@ class Agent:
             if not exe:
                 raise ApiError(501, 'Claude Code (the claude command) was not found; install it or set SMARTEX_CLAUDE')
             if model:
-                self.model = model
+                self.model_req = model
             self.dir.mkdir(parents=True, exist_ok=True)
             mcp = self.dir / 'mcp.json'
             mcp.write_text(json.dumps({'mcpServers': {'smartex': {
@@ -413,8 +455,10 @@ class Agent:
                    '--append-system-prompt', AGENT_PROMPT,
                    '--disallowedTools', 'Edit', 'Write', 'NotebookEdit',
                    '--allowedTools', 'mcp__smartex', 'Bash(fr *)', 'Bash(fr)', 'Read', 'Grep', 'Glob']
-            if self.model:
-                cmd += ['--model', self.model]
+            if self.model_req:
+                cmd += ['--model', self.model_req]
+            if self.effort:
+                cmd += ['--effort', self.effort]
             if self.session_id:
                 cmd += ['--resume', self.session_id]
             # the owner's Claude Code login by default; an explicit SMARTEX_AGENT_API_KEY (for shared setups) overrides it
@@ -504,6 +548,9 @@ class Agent:
             self.stderr_tail = (self.stderr_tail + [line.strip()])[-20:]
 
 
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
 def claude_binary():
     return os.environ.get('SMARTEX_CLAUDE') or shutil.which('claude')
 
@@ -554,6 +601,7 @@ ENDPOINTS = [
     ('POST', '/api/agent/message', 'project; body {text, context?: bool (default true)}', 'Send a message to the assistant (starts or resumes it). The person\'s current file, line and selection are added unless context is false.'),
     ('GET', '/api/agent/transcript', 'project, [since=INDEX]', 'The conversation with the assistant: user, assistant, tool, tool_error and result entries.'),
     ('POST', '/api/agent/start', 'project; body {model?}', 'Start (or resume) the assistant process without sending a message.'),
+    ('POST', '/api/agent/config', 'project; body {model?, effort?}', 'Choose the model (alias such as opus, sonnet, haiku, fable, or a full name; empty for the default) and effort (low, medium, high, xhigh, max; empty for the default). A running assistant restarts and resumes the conversation.'),
     ('POST', '/api/agent/stop', 'project', 'Stop the assistant process; the conversation is kept and resumes with the next message.'),
     ('POST', '/api/agent/reset', 'project', 'Stop the assistant and start a new conversation next time (the old transcript is archived).'),
     ('GET', '/api/events', 'project, [since=SEQ], [timeout=S <= 60]', 'Change feed (file_written, file_created, file_renamed, file_deleted, compile_started, compile_finished, note_added, note_resolved, ui_open, agent_status, agent_output). Blocks until something happens or timeout.'),
@@ -921,6 +969,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def post_api_agent_start(self, q):
         a = self.agent(q)
         a.start(self.body().get('model'))
+        self.send(200, a.info())
+
+    def post_api_agent_config(self, q):
+        a, b = self.agent(q), self.body()
+        a.configure(b.get('model'), b.get('effort'))
         self.send(200, a.info())
 
     def post_api_agent_stop(self, q):

@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
 <style>
 /* Blackboard (default): slate board, chalk ink. Paper: light working sheet. */
 :root, [data-theme="board"] {
@@ -134,12 +135,18 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #tabs button[aria-selected="true"] { color: var(--chalk); border-bottom-color: var(--accent); font-weight: 700; }
 #agentdot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--pink); margin-left: 6px; vertical-align: middle; }
 #agentdot.show { display: inline-block; }
-#paperview { display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; min-width: 0; }
-#agentview { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; min-height: 0; min-width: 0; }
+#paperview { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); gap: 10px; min-height: 0; min-width: 0; }
+#agentview { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); gap: 10px; min-height: 0; min-width: 0; }
 #chat li { overflow-wrap: anywhere; }
 #paperview[hidden], #agentview[hidden] { display: none; }
-#agentbar { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--chalk-soft); }
-#agentbar #agentstate { flex: 1; }
+#agentbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; color: var(--chalk-soft); }
+#agentbar #agentstop { margin-left: auto; }
+#agentbar #agentstate { flex: 1 1 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agentbar select { font-size: 13px; padding: 2px 4px; border: 1px solid var(--edge); border-radius: 7px; background: var(--board-2); color: var(--chalk); }
+#agentbar label { font-size: 12px; color: var(--faded); display: inline-flex; align-items: center; gap: 4px; }
+#chat .katex { font-size: 1.06em; }
+#chat .katex-display { overflow-x: auto; overflow-y: hidden; padding: 2px 0; margin: 6px 0; }
+#chat .user .katex-display { margin: 4px 0; }
 #agentbar button { font-size: 13px; padding: 2px 10px; }
 #agentstate.busy::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%;
   border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
@@ -148,7 +155,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #chat { list-style: none; margin: 0; padding: 0 4px 0 0; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 #chat .empty { color: var(--faded); font-size: 14px; line-height: 1.5; }
 #chat .user { align-self: flex-end; max-width: 88%; background: var(--sel); border-radius: 10px 10px 2px 10px; padding: 7px 11px; white-space: pre-wrap; }
-#chat .user .ctx { display: block; font: 11.5px "JetBrains Mono", monospace; color: var(--faded); margin-top: 3px; }
+#chat .user .ctx { display: block; font: 11.5px "JetBrains Mono", monospace; color: var(--faded); margin-top: 3px; overflow-wrap: anywhere; }
 #chat .assistant { max-width: 96%; line-height: 1.5; }
 #chat .assistant p { margin: 0 0 7px; }
 #chat .assistant code { font: 13px "JetBrains Mono", monospace; color: var(--yellow); }
@@ -162,7 +169,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #ask { resize: vertical; min-height: 44px; max-height: 30vh; background: var(--board-2); color: var(--chalk); border: 1px solid var(--edge);
   border-radius: 8px; padding: 8px 10px; font: 14.5px/1.45 "Atkinson Hyperlegible", sans-serif; }
 #ask::placeholder { color: var(--faded); }
-#strip { display: flex; align-items: baseline; gap: 10px; font-size: 14px; padding: 2px 2px 8px; position: relative; }
+#strip { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; font-size: 14px; padding: 2px 2px 8px; position: relative; }
 #strip::after { /* the chalk line */
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px;
   background: var(--edge); opacity: .9;
@@ -260,6 +267,12 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
     </div>
     <div id="agentview" role="tabpanel" hidden>
       <div id="agentbar"><span id="agentstate">Asleep</span>
+        <label>Model <select id="agentmodel" title="Model for the assistant (changing it resumes the same conversation)">
+          <option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option><option value="fable">Fable</option></select></label>
+        <label>Effort <select id="agenteffort" title="How long the assistant thinks before answering">
+          <option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option>
+          <option value="high">High</option><option value="xhigh">Extra high</option><option value="max">Max</option></select></label>
         <button id="agentstop" title="Stop the assistant process; the conversation is kept">Stop</button>
         <button id="agentnew" title="Forget this conversation and start a new one">New conversation</button></div>
       <ol id="chat" aria-live="polite"></ol>
@@ -271,6 +284,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 </main>
 <div id="toast" role="status"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/stex/stex.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
@@ -611,7 +625,10 @@ async function handleEvent(ev) {
   } else if (ev.type === 'agent_output') {
     await pullAgent();
   } else if (ev.type === 'agent_status') {
-    A.status = ev.status; A.busy = ev.busy; renderAgentState();
+    A.status = ev.status; A.busy = ev.busy;
+    if (ev.status === 'starting') A.model = null;          // a restart may bring a different model
+    if (ev.status === 'ready' && !A.model) { try { A.model = (await api('/api/agent?' + q())).model; } catch (e) {} }
+    renderAgentState();
   } else if (ev.type === 'ui_open' && !mine) {
     await openFile(ev.path, ev.line); toast(ev.message ? `${ev.client}: ${ev.message}` : `${ev.client} opened ${ev.path}:${ev.line}`, 7000);
   }
@@ -629,22 +646,42 @@ function showTab(t) {
 $('tab-paper').onclick = () => showTab('paper'); $('tab-agent').onclick = () => showTab('agent');
 function scrollChat() { const c = $('chat'); c.scrollTop = c.scrollHeight; }
 function esc(t) { return t.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+/* text with LaTeX math: $...$, $$...$$, \(...\), \[...\], equation/align environments; code stays verbatim */
+function tex(src, display) {
+  const clean = src.replace(/\\label\{[^}]*\}/g, '').replace(/\\(nonumber|notag)\b/g, '');
+  if (!window.katex) return esc(display ? `\\[${src}\\]` : `$${src}$`);
+  try { return katex.renderToString(clean, { displayMode: display, throwOnError: false, strict: 'ignore', trust: false, output: 'html' }); }
+  catch (e) { return `<code>${esc(src)}</code>`; }
+}
+function richText(p) {
+  const math = [], codes = [];
+  const keep = (src, display) => { math.push(tex(src, display)); return `\u0000${math.length - 1}\u0000`; };
+  p = p.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return `\u0001${codes.length - 1}\u0001`; })
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => keep(m, true))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => keep(m, true))
+    .replace(/\\begin\{(equation|align|gather|multline|eqnarray)(\*?)\}([\s\S]+?)\\end\{\1\2\}/g,
+             (_, env, star, body) => keep(/align|eqnarray/.test(env) ? `\\begin{aligned}${body}\\end{aligned}` : body, true))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(m, false))
+    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, pre, m) => pre + keep(m, false));
+  return p.split(/\n{2,}/).filter(x => x.trim()).map(par => '<p>' + esc(par)
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>') + '</p>').join('')
+    .replace(/\u0001(\d+)\u0001/g, (_, i) => `<code>${esc(codes[+i])}</code>`)
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => math[+i]);
+}
 function md(t) {
-  const parts = t.split(/```[a-zA-Z]*\n?/);
-  return parts.map((p, i) => i % 2 ? `<pre>${esc(p.replace(/\n$/, ''))}</pre>`
-    : p.split(/\n{2,}/).filter(x => x.trim()).map(par => '<p>' + esc(par)
-        .replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>') + '</p>').join('')).join('');
+  return t.split(/```[a-zA-Z]*\n?/).map((p, i) => i % 2 ? `<pre>${esc(p.replace(/\n$/, ''))}</pre>` : richText(p)).join('');
 }
 function renderAgentState() {
   const el = $('agentstate');
-  const label = { stopped: 'Asleep: your next message wakes it', starting: 'Waking up', ready: 'Awake' }[A.status] || A.status;
+  const label = { stopped: 'Asleep: your next message wakes it', starting: 'Waking up',
+                  ready: A.model ? `Awake on ${A.model}` : 'Awake' }[A.status] || A.status;
   el.textContent = A.busy ? 'Working' : label; el.className = A.busy || A.status === 'starting' ? 'busy' : '';
   $('agentstop').disabled = A.status === 'stopped';
 }
 function addEntry(e) {
   const chat = $('chat'); const empty = chat.querySelector('.empty'); if (empty) empty.remove();
   const li = document.createElement('li'); li.className = e.role;
-  if (e.role === 'user') { li.textContent = e.text; if (e.context) { const c = document.createElement('span'); c.className = 'ctx'; c.textContent = e.context.split(';')[0]; li.append(c); } }
+  if (e.role === 'user') { li.innerHTML = richText(e.text) || esc(e.text); if (e.context) { const c = document.createElement('span'); c.className = 'ctx'; c.textContent = e.context.split(';')[0]; li.append(c); } }
   else if (e.role === 'assistant') li.innerHTML = md(e.text);
   else if (e.role === 'tool') { const b = document.createElement('b'); b.textContent = e.name; li.append(b, document.createTextNode(' ' + Object.values(e.input || {}).join('  '))); }
   else if (e.role === 'tool_error') li.textContent = 'Tool error: ' + e.text;
@@ -653,7 +690,10 @@ function addEntry(e) {
 }
 async function loadAgent() {
   try {
-    const info = await api('/api/agent?' + q()); A.status = info.status; A.busy = info.busy;
+    const info = await api('/api/agent?' + q()); A.status = info.status; A.busy = info.busy; A.model = info.model;
+    $('agentmodel').value = info.model_requested || ''; $('agenteffort').value = info.effort || '';
+    if (info.model_requested && $('agentmodel').value !== info.model_requested) {   // a full model name set through the API
+      const o = document.createElement('option'); o.value = o.textContent = info.model_requested; $('agentmodel').append(o); $('agentmodel').value = info.model_requested; }
     $('chat').innerHTML = ''; A.last = -1;
     const t = await api('/api/agent/transcript?' + q({ since: -1 }));
     if (!t.entries.length) { const li = document.createElement('li'); li.className = 'empty';
@@ -676,6 +716,20 @@ $('composer').onsubmit = async ev => {
   catch (err) { toast('Could not reach the assistant: ' + err.message, 6000); $('ask').value = text; }
 };
 $('ask').addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); $('composer').requestSubmit(); } });
+async function configureAgent() {
+  const body = { model: $('agentmodel').value, effort: $('agenteffort').value };
+  try {
+    const info = await api('/api/agent/config?' + q(), { method: 'POST', body: JSON.stringify(body) });
+    A.status = info.status; A.model = info.model; renderAgentState();
+    const m = $('agentmodel').selectedOptions[0].textContent, e = $('agenteffort').selectedOptions[0].textContent;
+    toast(`The assistant will use ${m === 'Default' ? 'the default model' : m}${e === 'Default' ? '' : ', ' + e.toLowerCase() + ' effort'}` +
+          (info.status !== 'stopped' ? '; it restarted and kept the conversation' : ''));
+  } catch (err) {
+    toast(err.message, 6000);
+    try { const info = await api('/api/agent?' + q()); $('agentmodel').value = info.model_requested || ''; $('agenteffort').value = info.effort || ''; } catch (e) {}
+  }
+}
+$('agentmodel').onchange = configureAgent; $('agenteffort').onchange = configureAgent;
 $('agentstop').onclick = async () => { await api('/api/agent/stop?' + q(), { method: 'POST', body: '{}' }); A.status = 'stopped'; A.busy = false; renderAgentState(); };
 $('agentnew').onclick = async () => { if (!confirm('Start a new conversation? The current one is archived.')) return;
   await api('/api/agent/reset?' + q(), { method: 'POST', body: '{}' }); await loadAgent(); };
