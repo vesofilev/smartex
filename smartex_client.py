@@ -146,5 +146,21 @@ class Client:
     def resolve_note(self, note_id):
         return self.request('POST', '/api/notes/resolve', body=dict(id=note_id))
 
+    # the assistant (persistent Claude Code session on the server)
+    def agent(self):
+        return self.request('GET', '/api/agent')
+
+    def ask(self, text, context=True):
+        return self.request('POST', '/api/agent/message', body=dict(text=text, context=context))
+
+    def transcript(self, since=-1):
+        return self.request('GET', '/api/agent/transcript', dict(since=since))
+
+    def agent_stop(self):
+        return self.request('POST', '/api/agent/stop')
+
+    def agent_reset(self):
+        return self.request('POST', '/api/agent/reset')
+
     def events(self, since=0, timeout=0):
         return self.request('GET', '/api/events', dict(since=since, timeout=timeout), timeout=timeout + 30)

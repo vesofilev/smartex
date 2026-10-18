@@ -10,6 +10,11 @@ tunnel. Every request must carry the access token from ~/.smartex_token (header 
 and should name its author in the X-Client header (for example "human:browser" or "agent:claude-code"):
 every write is attributed, versioned and announced on the event feed.
 
+The built-in assistant (the Assistant tab, /api/agent) is one long-running Claude Code process per
+project, started in headless streaming mode with your own Claude Code login; it stays awake between
+messages and resumes its saved conversation after a restart. It is meant for the owner of the account
+the server runs under; see README.md.
+
 Standard library only. Optional extras: pdftotext and pdftoppm (poppler) enable PDF text and page images.
 """
 import argparse
@@ -29,7 +34,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
@@ -295,6 +300,199 @@ def synctex_records(project, main_path):
 
 
 # ---------------------------------------------------------------------------------------------------
+# the assistant: one persistent headless Claude Code process per project
+# ---------------------------------------------------------------------------------------------------
+AGENT_PROMPT = """You are the assistant inside smartex, a LaTeX workspace shared with the person who owns it.
+The current directory is the project folder. Rules:
+- Make every change through the smartex MCP tools (edit_file with base_sha from read_file, write_file,
+  create_file, ...). They attribute and version your changes and show them live in the person's editor.
+  The built-in Edit and Write tools are disabled for this reason.
+- Check your work with compile, and look at the result with view_pdf_page or pdf_text.
+- Text the person wrote is theirs. Unless they explicitly ask you to change it, comment with add_note on
+  the relevant line instead of editing. Use open_in_editor to point them to a location.
+- Each message may start with "[smartex context: ...]" saying which file, line and selection the person is
+  looking at. Use it to resolve "this", "here", "the selected sentence".
+- For the literature, the frontier CLI is available through Bash if installed: fr search, fr abs, fr toc,
+  fr read, fr eq, fr bib.
+- Replies are shown in a narrow side panel: keep them short and concrete."""
+
+
+class Agent:
+    def __init__(self, project, port):
+        self.p, self.port = project, port
+        self.dir = project.meta / 'agent'
+        self.proc, self.status, self.busy, self.error = None, 'stopped', False, None
+        self.lock = threading.RLock()
+        self.entries = []
+        self.stderr_tail = []
+        state = self._load_state()
+        self.session_id, self.model = state.get('session_id'), state.get('model')
+        tf = self.dir / 'transcript.jsonl'
+        if tf.exists():
+            self.entries = [json.loads(l) for l in tf.read_text().splitlines() if l.strip()][-500:]
+
+    # ---- persistence ----
+    def _load_state(self):
+        f = self.dir / 'state.json'
+        return json.loads(f.read_text()) if f.exists() else {}
+
+    def _save_state(self):
+        self.dir.mkdir(parents=True, exist_ok=True)
+        (self.dir / 'state.json').write_text(json.dumps(dict(session_id=self.session_id, model=self.model)))
+
+    def _add(self, **entry):
+        with self.lock:
+            entry.update(index=(self.entries[-1]['index'] + 1) if self.entries else 0, time=time.strftime('%Y-%m-%dT%H:%M:%S'))
+            self.entries.append(entry)
+            del self.entries[:-500]
+            self.dir.mkdir(parents=True, exist_ok=True)
+            with open(self.dir / 'transcript.jsonl', 'a') as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+        EVENTS.emit(self.p.name, 'agent_output', index=entry['index'], role=entry['role'], client='agent:claude')
+
+    def _set(self, status=None, busy=None, error=None):
+        if status is not None:
+            self.status = status
+        if busy is not None:
+            self.busy = busy
+        if error is not None:
+            self.error = error
+        EVENTS.emit(self.p.name, 'agent_status', status=self.status, busy=self.busy, client='agent:claude')
+
+    def info(self):
+        return dict(status=self.status, busy=self.busy, session_id=self.session_id, model=self.model,
+                    pid=self.proc.pid if self.running() else None, error=self.error, entries=len(self.entries),
+                    claude=claude_binary() or None)
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    # ---- process ----
+    def start(self, model=None):
+        with self.lock:
+            if self.running():
+                return
+            exe = claude_binary()
+            if not exe:
+                raise ApiError(501, 'Claude Code (the claude command) was not found; install it or set SMARTEX_CLAUDE')
+            if model:
+                self.model = model
+            self.dir.mkdir(parents=True, exist_ok=True)
+            mcp = self.dir / 'mcp.json'
+            mcp.write_text(json.dumps({'mcpServers': {'smartex': {
+                'command': sys.executable,
+                'args': [str(HERE / 'smartex_mcp.py'), '--url', f'http://127.0.0.1:{self.port}',
+                         '--client', 'agent:claude', '--project', self.p.name]}}}, indent=1))
+            cmd = [exe, '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+                   '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', str(mcp),
+                   '--append-system-prompt', AGENT_PROMPT,
+                   '--disallowedTools', 'Edit', 'Write', 'NotebookEdit',
+                   '--allowedTools', 'mcp__smartex', 'Bash(fr *)', 'Bash(fr)', 'Read', 'Grep', 'Glob']
+            if self.model:
+                cmd += ['--model', self.model]
+            if self.session_id:
+                cmd += ['--resume', self.session_id]
+            # the owner's Claude Code login by default; an explicit SMARTEX_AGENT_API_KEY (for shared setups) overrides it
+            env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_API_KEY'}
+            if os.environ.get('SMARTEX_AGENT_API_KEY'):
+                env['ANTHROPIC_API_KEY'] = os.environ['SMARTEX_AGENT_API_KEY']
+            self.proc = subprocess.Popen(cmd, cwd=self.p.root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, text=True, bufsize=1)
+            self.error, self.stderr_tail = None, []
+            self._set(status='starting', busy=False)
+            threading.Thread(target=self._read_stdout, args=(self.proc,), daemon=True).start()
+            threading.Thread(target=self._read_stderr, args=(self.proc,), daemon=True).start()
+
+    def stop(self):
+        with self.lock:
+            if self.running():
+                self.proc.terminate()
+                try:
+                    self.proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            self.proc = None
+            self._set(status='stopped', busy=False)
+
+    def reset(self):
+        self.stop()
+        with self.lock:
+            tf = self.dir / 'transcript.jsonl'
+            if tf.exists():
+                tf.rename(self.dir / f'transcript-{time.strftime("%Y%m%dT%H%M%S")}.jsonl')
+            self.entries, self.session_id = [], None
+            self._save_state()
+        self._set(status='stopped', busy=False)
+
+    def send(self, text, client, context=None):
+        if not text.strip():
+            raise ApiError(400, 'empty message')
+        self.start()
+        prompt = (f'[smartex context: {context}]\n\n' if context else '') + text
+        self._add(role='user', text=text, client=client, context=context)
+        with self.lock:
+            self.proc.stdin.write(json.dumps({'type': 'user', 'message': {'role': 'user', 'content': prompt}}) + '\n')
+            self.proc.stdin.flush()
+        self._set(busy=True)
+
+    def _read_stdout(self, proc):
+        for line in proc.stdout:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            t = m.get('type')
+            if t == 'system' and m.get('subtype') == 'init':
+                self.session_id = m.get('session_id') or self.session_id
+                self.model = m.get('model') or self.model
+                self._save_state()
+                self._set(status='ready')
+            elif t == 'assistant':
+                for block in m.get('message', {}).get('content', []):
+                    if block.get('type') == 'text' and block.get('text', '').strip():
+                        self._add(role='assistant', text=block['text'])
+                    elif block.get('type') == 'tool_use':
+                        name = block.get('name', '').replace('mcp__smartex__', '')
+                        args = block.get('input') or {}
+                        brief = {k: (v if len(str(v)) < 120 else str(v)[:117] + '...') for k, v in args.items()
+                                 if k in ('path', 'line', 'query', 'page', 'main', 'command', 'id', 'to', 'text', 'pattern')}
+                        self._add(role='tool', name=name, input=brief)
+            elif t == 'user':
+                for block in (m.get('message', {}).get('content') or []):
+                    if isinstance(block, dict) and block.get('type') == 'tool_result' and block.get('is_error'):
+                        content = block.get('content')
+                        text = content if isinstance(content, str) else json.dumps(content)[:300]
+                        self._add(role='tool_error', text=str(text)[:300])
+            elif t == 'result':
+                self._add(role='result', ok=not m.get('is_error'), turns=m.get('num_turns'),
+                          seconds=round((m.get('duration_ms') or 0) / 1000, 1), subtype=m.get('subtype'))
+                self._set(busy=False)
+        code = proc.wait()
+        with self.lock:
+            if self.proc is proc:
+                self.proc = None
+                err = None if code in (0, -15) else f'Claude Code exited with code {code}: ' + ' | '.join(self.stderr_tail[-3:])
+                self._set(status='stopped', busy=False, error=err)
+
+    def _read_stderr(self, proc):
+        for line in proc.stderr:
+            self.stderr_tail = (self.stderr_tail + [line.strip()])[-20:]
+
+
+def claude_binary():
+    return os.environ.get('SMARTEX_CLAUDE') or shutil.which('claude')
+
+
+AGENTS = {}
+
+
+def agent_for(project, port):
+    if project.name not in AGENTS:
+        AGENTS[project.name] = Agent(project, port)
+    return AGENTS[project.name]
+
+
+# ---------------------------------------------------------------------------------------------------
 # HTTP API
 # ---------------------------------------------------------------------------------------------------
 ENDPOINTS = [
@@ -327,7 +525,13 @@ ENDPOINTS = [
     ('GET', '/api/notes', 'project, [path], [all=1]', 'Review notes anchored to lines (open ones unless all=1).'),
     ('POST', '/api/notes', 'project; body {path, line, text}', 'Add a review note: comment on text without editing it.'),
     ('POST', '/api/notes/resolve', 'project; body {id}', 'Mark a note as resolved.'),
-    ('GET', '/api/events', 'project, [since=SEQ], [timeout=S <= 60]', 'Change feed (file_written, file_created, file_renamed, file_deleted, compile_started, compile_finished, note_added, note_resolved, ui_open, presence). Blocks until something happens or timeout.'),
+    ('GET', '/api/agent', 'project', 'State of the assistant: stopped, starting, ready; busy; session id; model.'),
+    ('POST', '/api/agent/message', 'project; body {text, context?: bool (default true)}', 'Send a message to the assistant (starts or resumes it). The person\'s current file, line and selection are added unless context is false.'),
+    ('GET', '/api/agent/transcript', 'project, [since=INDEX]', 'The conversation with the assistant: user, assistant, tool, tool_error and result entries.'),
+    ('POST', '/api/agent/start', 'project; body {model?}', 'Start (or resume) the assistant process without sending a message.'),
+    ('POST', '/api/agent/stop', 'project', 'Stop the assistant process; the conversation is kept and resumes with the next message.'),
+    ('POST', '/api/agent/reset', 'project', 'Stop the assistant and start a new conversation next time (the old transcript is archived).'),
+    ('GET', '/api/events', 'project, [since=SEQ], [timeout=S <= 60]', 'Change feed (file_written, file_created, file_renamed, file_deleted, compile_started, compile_finished, note_added, note_resolved, ui_open, agent_status, agent_output). Blocks until something happens or timeout.'),
 ]
 
 
@@ -335,6 +539,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = f'smartex/{VERSION}'
     projects = {}
     token = ''
+    port = 8765
 
     def log_message(self, fmt, *args):
         sys.stderr.write('%s %s %s\n' % (time.strftime('%H:%M:%S'), self.headers.get('X-Client', '-') if self.headers else '-', fmt % args))
@@ -415,7 +620,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          'to comment on a person\'s text without changing it, use POST /api/notes'],
             endpoints=[dict(method=m, path=p, params=a, description=d) for m, p, a, d in ENDPOINTS],
             features=dict(pdf_text=bool(shutil.which('pdftotext')), pdf_page_images=bool(shutil.which('pdftoppm')),
-                          synctex=True)))
+                          synctex=True, assistant=bool(claude_binary()))))
 
     def get_api_projects(self, q):
         self.send(200, [dict(name=p.name, main=p.main_file()) for p in self.projects.values()])
@@ -674,6 +879,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
         EVENTS.emit(p.name, 'note_resolved', id=b['id'], client=self.client)
         self.send(200, hit[0])
 
+    # ---- the assistant ----
+    def agent(self, q):
+        return agent_for(self.project(q), self.port)
+
+    def get_api_agent(self, q):
+        self.send(200, self.agent(q).info())
+
+    def post_api_agent_start(self, q):
+        a = self.agent(q)
+        a.start(self.body().get('model'))
+        self.send(200, a.info())
+
+    def post_api_agent_stop(self, q):
+        a = self.agent(q)
+        a.stop()
+        self.send(200, a.info())
+
+    def post_api_agent_reset(self, q):
+        a = self.agent(q)
+        a.reset()
+        self.send(200, a.info())
+
+    def post_api_agent_message(self, q):
+        p, b = self.project(q), self.body()
+        context = None
+        if b.get('context', True):
+            humans = sorted(((k, v) for k, v in p.presence.items() if k.startswith('human:')), key=lambda kv: kv[1].get('updated', ''))
+            if humans:
+                v = humans[-1][1]
+                context = f"the person is viewing {v.get('path')} at line {v.get('line')}"
+                if v.get('selection'):
+                    context += f"; selected text: {v['selection'][:1500]!r}"
+        a = self.agent(q)
+        a.send(str(b.get('text', '')), self.client, context)
+        self.send(200, a.info())
+
+    def get_api_agent_transcript(self, q):
+        a = self.agent(q)
+        since = int(self.arg(q, 'since', -1))
+        self.send(200, dict(entries=[e for e in a.entries if e['index'] > since], status=a.status, busy=a.busy))
+
     def get_api_events(self, q):
         p = self.project(q)
         items, last = EVENTS.since(p.name, int(self.arg(q, 'since', 0)), float(self.arg(q, 'timeout', 0)))
@@ -702,9 +948,13 @@ def main():
         token = secrets.token_urlsafe(24)
         token_file.write_text(token + '\n')
         token_file.chmod(0o600)
-    Handler.projects, Handler.token = projects, token
+    Handler.projects, Handler.token, Handler.port = projects, token, args.port
     srv = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     srv.daemon_threads = True
+    import atexit
+    import signal
+    atexit.register(lambda: [a.stop() for a in AGENTS.values()])
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so atexit runs on `smartex.sh stop`
     print(f'smartex {VERSION} serving {", ".join(projects)} on 127.0.0.1:{args.port}', flush=True)
     print(f'open: http://localhost:{args.port}/?token={token}', flush=True)
     srv.serve_forever()

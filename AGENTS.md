@@ -60,6 +60,14 @@ Configuration: `SMARTEX_URL` (default `http://127.0.0.1:8765`), `SMARTEX_TOKEN` 
 | review notes | `list_notes`, `add_note`, `resolve_note` | `notes`, `note`, `resolve` | `GET/POST /api/notes`, `POST /api/notes/resolve` |
 | change feed | `wait_for_events` | `events --since N --timeout S` | `GET /api/events` |
 
+## The built-in assistant
+
+smartex can also host an agent itself: a persistent Claude Code session on the server, used from the
+Assistant tab. If you are a different agent working in the same project, you will see its changes
+attributed to `agent:claude` on the event feed. You can message it too (`POST /api/agent/message`,
+`smartex ask`) and read its conversation (`GET /api/agent/transcript`), for example to delegate a long
+compile-and-fix loop while you do something else.
+
 ## Errors
 
 Errors are JSON objects with an `error` message and an HTTP status: 400 bad request, 403 forbidden

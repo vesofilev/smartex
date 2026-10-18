@@ -25,11 +25,38 @@ For agents (API, CLI, MCP):
   instead of editing their text, and wait on a change feed instead of polling
 - Every write is checked against the version you read, and the previous version is kept
 
+## The assistant
+
+The **Assistant** tab next to the PDF is a conversation with Claude that runs on the server, not on your
+computer. smartex starts one long-running Claude Code process per project in headless streaming mode:
+- **It stays awake** between messages, with the whole conversation in memory (about 270 MB on the server).
+- **It resumes**: if it is stopped or the server restarts, the next message continues the same saved
+  conversation.
+- **It sees what you see**: each message carries the file, line and selected text you are looking at, so
+  "rephrase the selected sentence" or "why does this equation fail?" just work.
+- **Its changes go through smartex**: Claude Code's own Edit and Write tools are disabled, so every change
+  is attributed to `agent:claude`, versioned, and appears live in your editor. By default it comments on
+  your text with review notes instead of rewriting it.
+- **Its tools**: the smartex MCP tools, read-only file access, and the `fr` command from
+  [frontier](https://github.com/vesofilev/frontier) for the literature, when installed.
+
+It needs Claude Code installed and logged in on the server (`SMARTEX_CLAUDE` sets the path if `claude` is
+not on `PATH`). It uses that login, that is, the Claude subscription of the account the server runs
+under; an `ANTHROPIC_API_KEY` in the environment is ignored.
+
+**Use it only for yourself.** Anthropic's terms allow a subscription to be used through Claude Code by its
+owner, but not to serve other people's requests. If several people use one smartex server, set
+`SMARTEX_AGENT_API_KEY` to an Anthropic API key; the assistant then runs on that key instead.
+
+From scripts: `./smartex ask "check that every \\label is referenced"` sends a message and prints the
+reply; `./smartex transcript`, `./smartex agent-stop` and `./smartex agent-reset` do the rest.
+
 ## Requirements
 
 - Python 3.8 or newer on the machine with the LaTeX project
 - TeX Live with `latexmk` (set `SMARTEX_TEXBIN` if it is not on `PATH`)
 - Optional: `pdftotext` and `pdftoppm` from poppler, for PDF text and page images
+- Optional: Claude Code, logged in, for the assistant
 
 ## Quick start
 

@@ -13,11 +13,13 @@ Examples
   smartex where ernst_chapter.tex 25          # which PDF page shows line 25
   smartex note introduction.tex 12 "Euler-Lagrange, not Lagrange-Euler"
   smartex events --since 0 --timeout 30       # wait for changes
+  smartex ask "Check that every \\label is referenced"   # talk to the assistant
 """
 import argparse
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from smartex_client import Client, SmartexError  # noqa: E402
@@ -76,6 +78,12 @@ def main():
     p = sub.add_parser('notes', help='open review notes'); p.add_argument('path', nargs='?'), p.add_argument('--all', action='store_true')
     p = sub.add_parser('note', help='add a review note at a line'); p.add_argument('path'), p.add_argument('line', type=int), p.add_argument('text')
     p = sub.add_parser('resolve', help='resolve a review note'); p.add_argument('id')
+    p = sub.add_parser('ask', help='message the assistant and wait for its reply')
+    p.add_argument('text'), p.add_argument('--no-context', action='store_true'), p.add_argument('--timeout', type=float, default=600)
+    sub.add_parser('agent', help='state of the assistant')
+    p = sub.add_parser('transcript', help='conversation with the assistant'); p.add_argument('--since', type=int, default=-1)
+    sub.add_parser('agent-stop', help='stop the assistant (the conversation is kept)')
+    sub.add_parser('agent-reset', help='start a new conversation with the assistant')
     p = sub.add_parser('events', help='change feed; with --timeout, wait for the next change')
     p.add_argument('--since', type=int, default=0), p.add_argument('--timeout', type=float, default=0)
     a = ap.parse_args()
@@ -119,6 +127,27 @@ def main():
         elif a.cmd == 'notes': out(c.notes(a.path, a.all))
         elif a.cmd == 'note': out(c.add_note(a.path, a.line, a.text))
         elif a.cmd == 'resolve': out(c.resolve_note(a.id))
+        elif a.cmd == 'ask':
+            start = (c.transcript()['entries'] or [{'index': -1}])[-1]['index']
+            c.ask(a.text, not a.no_context)
+            deadline, seen = time.time() + a.timeout, start
+            while time.time() < deadline:
+                for e in c.transcript(seen)['entries']:
+                    seen = e['index']
+                    if e['role'] == 'assistant': out(e['text'])
+                    elif e['role'] == 'tool': sys.stderr.write(f"  [{e['name']} {' '.join(map(str, e.get('input', {}).values()))}]\n")
+                    elif e['role'] == 'tool_error': sys.stderr.write(f"  [tool error: {e['text']}]\n")
+                    elif e['role'] == 'result':
+                        sys.stderr.write(f"  [{'done' if e['ok'] else 'stopped'} in {e['seconds']} s]\n")
+                        return 0 if e['ok'] else 1
+                if c.agent()['status'] == 'stopped' and seen > start:
+                    sys.stderr.write('  [the assistant stopped]\n'); return 1
+                time.sleep(1.5)
+            sys.stderr.write('  [timed out waiting; the assistant keeps working, see: smartex transcript]\n'); return 1
+        elif a.cmd == 'agent': out(c.agent())
+        elif a.cmd == 'transcript': out(c.transcript(a.since))
+        elif a.cmd == 'agent-stop': out(c.agent_stop())
+        elif a.cmd == 'agent-reset': out(c.agent_reset())
         elif a.cmd == 'events': out(c.events(a.since, a.timeout))
     except SmartexError as e:
         sys.stderr.write(json.dumps(dict(status=e.status, **e.info), ensure_ascii=False) + '\n')

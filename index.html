@@ -119,7 +119,39 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #splitter::after { content: ""; position: absolute; inset: 0 3px; background: var(--edge); border-radius: 2px; }
 #splitter:hover::after, #splitter.drag::after { background: var(--accent); }
 
-#pdfpane { display: grid; grid-template-rows: auto 1fr; min-height: 0; padding: 12px 16px 16px 8px; gap: 10px; }
+#pdfpane { display: grid; grid-template-rows: auto 1fr; min-height: 0; padding: 10px 16px 16px 8px; gap: 10px; }
+#tabs { display: flex; gap: 4px; }
+#tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 4px 10px; color: var(--chalk-soft); }
+#tabs button[aria-selected="true"] { color: var(--chalk); border-bottom-color: var(--accent); font-weight: 700; }
+#agentdot { display: none; width: 7px; height: 7px; border-radius: 50%; background: var(--pink); margin-left: 6px; vertical-align: middle; }
+#agentdot.show { display: inline-block; }
+#paperview { display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; }
+#agentview { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; min-height: 0; }
+#paperview[hidden], #agentview[hidden] { display: none; }
+#agentbar { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--chalk-soft); }
+#agentbar #agentstate { flex: 1; }
+#agentbar button { font-size: 13px; padding: 2px 10px; }
+#agentstate.busy::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%;
+  border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #agentstate.busy::before { animation: none; } }
+#chat { list-style: none; margin: 0; padding: 0 4px 0 0; overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+#chat .empty { color: var(--faded); font-size: 14px; line-height: 1.5; }
+#chat .user { align-self: flex-end; max-width: 88%; background: var(--sel); border-radius: 10px 10px 2px 10px; padding: 7px 11px; white-space: pre-wrap; }
+#chat .user .ctx { display: block; font: 11.5px "JetBrains Mono", monospace; color: var(--faded); margin-top: 3px; }
+#chat .assistant { max-width: 96%; line-height: 1.5; }
+#chat .assistant p { margin: 0 0 7px; }
+#chat .assistant code { font: 13px "JetBrains Mono", monospace; color: var(--yellow); }
+#chat .assistant pre { font: 12.5px/1.5 "JetBrains Mono", monospace; background: var(--gutter); border: 1px solid var(--edge);
+  border-radius: 6px; padding: 8px 10px; overflow: auto; margin: 0 0 7px; }
+#chat .tool { font: 12.5px "JetBrains Mono", monospace; color: var(--faded); }
+#chat .tool b { color: var(--blue); font-weight: 600; }
+#chat .tool_error { font-size: 12.5px; color: var(--red); }
+#chat .result { font-size: 12px; color: var(--faded); border-top: 1px dashed var(--edge); padding-top: 4px; }
+#composer { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+#ask { resize: vertical; min-height: 44px; max-height: 30vh; background: var(--board-2); color: var(--chalk); border: 1px solid var(--edge);
+  border-radius: 8px; padding: 8px 10px; font: 14.5px/1.45 "Atkinson Hyperlegible", sans-serif; }
+#ask::placeholder { color: var(--faded); }
 #strip { display: flex; align-items: baseline; gap: 10px; font-size: 14px; padding: 2px 2px 8px; position: relative; }
 #strip::after { /* the chalk line */
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px;
@@ -186,9 +218,24 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
   </section>
   <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize editor and preview" tabindex="0"></div>
   <section id="pdfpane">
-    <div id="strip"><span class="result" id="result">Not compiled yet</span><span id="detail"></span></div>
-    <div id="sheet"><iframe id="pdf" title="Compiled PDF"></iframe>
-      <div id="nopdf"><strong>No PDF yet</strong><span>Press Compile to typeset the paper.</span></div></div>
+    <div id="tabs" role="tablist">
+      <button role="tab" id="tab-paper" aria-selected="true" aria-controls="paperview">Paper</button>
+      <button role="tab" id="tab-agent" aria-selected="false" aria-controls="agentview">Assistant<span id="agentdot"></span></button>
+    </div>
+    <div id="paperview" role="tabpanel">
+      <div id="strip"><span class="result" id="result">Not compiled yet</span><span id="detail"></span></div>
+      <div id="sheet"><iframe id="pdf" title="Compiled PDF"></iframe>
+        <div id="nopdf"><strong>No PDF yet</strong><span>Press Compile to typeset the paper.</span></div></div>
+    </div>
+    <div id="agentview" role="tabpanel" hidden>
+      <div id="agentbar"><span id="agentstate">Asleep</span>
+        <button id="agentstop" title="Stop the assistant process; the conversation is kept">Stop</button>
+        <button id="agentnew" title="Forget this conversation and start a new one">New conversation</button></div>
+      <ol id="chat" aria-live="polite"></ol>
+      <form id="composer"><textarea id="ask" rows="2" aria-label="Message to the assistant"
+        placeholder="Ask about the paper. The assistant sees which file and line you are on."></textarea>
+        <button class="primary" type="submit">Send</button></form>
+    </div>
   </section>
 </main>
 <div id="toast" role="status"></div>
@@ -223,6 +270,7 @@ function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.cl
 /* theme */
 function setTheme(t) { document.documentElement.dataset.theme = t; $('theme').textContent = t === 'board' ? 'Paper' : 'Blackboard'; store.set('smartex.theme', t); }
 setTheme(store.get('smartex.theme') || 'board');
+setTimeout(() => showTab(store.get('smartex.tab') === 'agent' ? 'agent' : 'paper'), 0);
 $('theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'board' ? 'paper' : 'board');
 
 /* editor */
@@ -296,6 +344,7 @@ async function switchProject(name) {
   await refreshNotes();
   if (S.main) await openFile(S.main);
   showPdf(S.hasPdf);
+  loadAgent();
   startEvents();
 }
 
@@ -467,10 +516,77 @@ async function handleEvent(ev) {
     try { showCompile(await api('/api/compile/last?' + q()), ev.client); } catch (e) {}
   } else if (ev.type === 'note_added' || ev.type === 'note_resolved') {
     await refreshNotes(); if (ev.type === 'note_added' && !mine) toast(`${ev.client} left a note on ${ev.path}:${ev.line}`);
+  } else if (ev.type === 'agent_output') {
+    await pullAgent();
+  } else if (ev.type === 'agent_status') {
+    A.status = ev.status; A.busy = ev.busy; renderAgentState();
   } else if (ev.type === 'ui_open' && !mine) {
     await openFile(ev.path, ev.line); toast(ev.message ? `${ev.client}: ${ev.message}` : `${ev.client} opened ${ev.path}:${ev.line}`, 7000);
   }
 }
+
+/* the assistant: a persistent Claude Code session on the server */
+const A = { last: -1, status: 'stopped', busy: false, tab: 'paper' };
+function showTab(t) {
+  A.tab = t;
+  $('tab-paper').setAttribute('aria-selected', t === 'paper'); $('tab-agent').setAttribute('aria-selected', t === 'agent');
+  $('paperview').hidden = t !== 'paper'; $('agentview').hidden = t !== 'agent';
+  if (t === 'agent') { $('agentdot').classList.remove('show'); $('ask').focus(); scrollChat(); }
+  store.set('smartex.tab', t);
+}
+$('tab-paper').onclick = () => showTab('paper'); $('tab-agent').onclick = () => showTab('agent');
+function scrollChat() { const c = $('chat'); c.scrollTop = c.scrollHeight; }
+function esc(t) { return t.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
+function md(t) {
+  const parts = t.split(/```[a-zA-Z]*\n?/);
+  return parts.map((p, i) => i % 2 ? `<pre>${esc(p.replace(/\n$/, ''))}</pre>`
+    : p.split(/\n{2,}/).filter(x => x.trim()).map(par => '<p>' + esc(par)
+        .replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>') + '</p>').join('')).join('');
+}
+function renderAgentState() {
+  const el = $('agentstate');
+  const label = { stopped: 'Asleep: your next message wakes it', starting: 'Waking up', ready: 'Awake' }[A.status] || A.status;
+  el.textContent = A.busy ? 'Working' : label; el.className = A.busy || A.status === 'starting' ? 'busy' : '';
+  $('agentstop').disabled = A.status === 'stopped';
+}
+function addEntry(e) {
+  const chat = $('chat'); const empty = chat.querySelector('.empty'); if (empty) empty.remove();
+  const li = document.createElement('li'); li.className = e.role;
+  if (e.role === 'user') { li.textContent = e.text; if (e.context) { const c = document.createElement('span'); c.className = 'ctx'; c.textContent = e.context.split(';')[0]; li.append(c); } }
+  else if (e.role === 'assistant') li.innerHTML = md(e.text);
+  else if (e.role === 'tool') { const b = document.createElement('b'); b.textContent = e.name; li.append(b, document.createTextNode(' ' + Object.values(e.input || {}).join('  '))); }
+  else if (e.role === 'tool_error') li.textContent = 'Tool error: ' + e.text;
+  else if (e.role === 'result') li.textContent = e.ok ? `Done in ${e.seconds} s` : `Stopped (${e.subtype || 'error'}) after ${e.seconds} s`;
+  chat.append(li);
+}
+async function loadAgent() {
+  try {
+    const info = await api('/api/agent?' + q()); A.status = info.status; A.busy = info.busy;
+    $('chat').innerHTML = ''; A.last = -1;
+    const t = await api('/api/agent/transcript?' + q({ since: -1 }));
+    if (!t.entries.length) { const li = document.createElement('li'); li.className = 'empty';
+      li.textContent = info.claude ? 'The assistant is a Claude Code session on the server. It keeps this conversation, sees what you are looking at, and makes its edits through smartex so you can watch and undo them.'
+                                   : 'Claude Code is not installed on the server, so the assistant is unavailable.'; $('chat').append(li); }
+    for (const e of t.entries) { addEntry(e); A.last = e.index; }
+    renderAgentState(); scrollChat();
+  } catch (e) { /* assistant endpoints unavailable */ }
+}
+async function pullAgent() {
+  const t = await api('/api/agent/transcript?' + q({ since: A.last }));
+  for (const e of t.entries) { addEntry(e); A.last = e.index; }
+  A.status = t.status; A.busy = t.busy; renderAgentState(); scrollChat();
+  if (A.tab !== 'agent' && t.entries.some(e => e.role === 'assistant')) $('agentdot').classList.add('show');
+}
+$('composer').onsubmit = async ev => {
+  ev.preventDefault(); const text = $('ask').value.trim(); if (!text) return;
+  $('ask').value = '';
+  try { const info = await api('/api/agent/message?' + q(), { method: 'POST', body: JSON.stringify({ text }) }); A.status = info.status; A.busy = true; renderAgentState(); await pullAgent(); }
+  catch (err) { toast('Could not reach the assistant: ' + err.message, 6000); $('ask').value = text; }
+};
+$('ask').addEventListener('keydown', ev => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); $('composer').requestSubmit(); } });
+$('agentstop').onclick = async () => { await api('/api/agent/stop?' + q(), { method: 'POST', body: '{}' }); A.status = 'stopped'; A.busy = false; renderAgentState(); };
+$('agentnew').onclick = async () => { if (!confirm('Start a new conversation? The current one is archived.')) return;
+  await api('/api/agent/reset?' + q(), { method: 'POST', body: '{}' }); await loadAgent(); };
 
 /* resizable split between editor and preview */
 (() => {
