@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """smartex server: a LaTeX workspace that people and AI agents share.
 
-    python3 server.py --root DIR [--root DIR ...] [--port 8765]
+    python3 server.py --root DIR [--root DIR ...] [--port 8765] [--public HOST:PORT --allow-from ADDR ...]
 
 People use the browser editor (index.html). Agents use the same JSON API, either directly, through the
 `smartex` command-line client, or through the MCP server (`smartex_mcp.py`). GET /api/help describes
-every endpoint. The server listens on 127.0.0.1 only; reach it from another computer through an SSH
-tunnel. Every request must carry the access token from ~/.smartex_token (header X-Token or ?token=),
-and should name its author in the X-Client header (for example "human:browser" or "agent:claude-code"):
-every write is attributed, versioned and announced on the event feed.
+every endpoint. The server listens on 127.0.0.1; reach it from another computer through an SSH tunnel,
+or through a reverse proxy (see "Behind a reverse proxy" in README.md). Every request must carry the
+access token from ~/.smartex_token: header X-Token, ?token=, or the sign-in cookie that the sign-in page
+sets. Requests should name their author in the X-Client header (for example "human:browser" or
+"agent:claude-code"): every write is attributed, versioned and announced on the event feed.
+
+--public HOST:PORT opens a second listener for a reverse proxy such as nginx. It accepts connections only
+from this machine and from the --allow-from addresses or networks (at least one is required). The proxy
+should send X-Forwarded-Proto and X-Forwarded-Prefix (the sub-path it serves smartex under), so that the
+sign-in cookie is marked Secure and scoped to that path. With the cookie, every POST must also carry the
+X-Client header and, when the browser sends one, a same-origin Origin header: another site cannot make
+your browser change anything.
 
 The built-in assistant (the Assistant tab, /api/agent) is one long-running Claude Code process per
 project, started in headless streaming mode with your own Claude Code login; it stays awake between
@@ -20,7 +28,10 @@ Standard library only. Optional extras: pdftotext and pdftoppm (poppler) enable 
 import argparse
 import gzip
 import hashlib
+import html
+import http.cookies
 import http.server
+import ipaddress
 import json
 import os
 import re
@@ -34,10 +45,41 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
+COOKIE = 'smartex_token'
+SIGNIN_PAGE = '''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to smartex</title>
+<style>
+  :root { color-scheme: dark; --bg: #1d2a27; --panel: #243430; --ink: #e9efe9; --mute: #9fb3ab; --accent: #f0c94a; --bad: #ff8a7a; }
+  @media (prefers-color-scheme: light) { :root { color-scheme: light; --bg: #f6f4ee; --panel: #ffffff; --ink: #1f2a27; --mute: #5d6d67; --accent: #b8860b; --bad: #b3261e; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; }
+  form { width: 100%; max-width: 380px; background: var(--panel); padding: 28px; border-radius: 10px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  p { margin: 0 0 18px; color: var(--mute); font-size: 14px; }
+  label { display: block; font-size: 14px; margin-bottom: 6px; }
+  input[type=password] { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--mute); border-radius: 6px;
+                         background: transparent; color: var(--ink); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { margin-top: 16px; width: 100%; padding: 10px; font: inherit; font-weight: 700; border: 0; border-radius: 6px;
+           background: var(--accent); color: #1d2a27; cursor: pointer; }
+  .err { color: var(--bad); margin: 12px 0 0; font-size: 14px; }
+</style></head>
+<body><form method="post" action="login">
+  <h1>smartex</h1>
+  <p>Enter the access token. It is in ~/.smartex_token on the server.</p>
+  <input type="text" name="username" value="smartex" autocomplete="username" hidden>
+  <label for="token">Access token</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" autofocus required>
+  __ERROR__
+  <button type="submit">Sign in</button>
+</form></body></html>
+'''
 # directories searched for latexmk before PATH: $SMARTEX_TEXBIN, a user-space TeX Live, MacTeX
 TEXBINS = [Path(p) for p in (os.environ.get('SMARTEX_TEXBIN', ''),
                              str(Path.home() / 'texlive' / '2026' / 'bin' / 'x86_64-linux'),
@@ -629,6 +671,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     projects = {}
     token = ''
     port = 8765
+    allow_from = []          # networks the public listener accepts, besides the loopback
 
     def log_message(self, fmt, *args):
         sys.stderr.write('%s %s %s\n' % (time.strftime('%H:%M:%S'), self.headers.get('X-Client', '-') if self.headers else '-', fmt % args))
@@ -640,6 +683,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Frame-Options', 'DENY')
+        for k, v in getattr(self, '_extra_headers', []):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
@@ -672,12 +719,77 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(404, f'unknown project {name!r}; known: {", ".join(self.projects)}')
         return self.projects[name]
 
+    # ---- who may connect, and how they prove it ----
+    def peer_allowed(self):
+        """The loopback listener takes everyone on this machine; the public one only the proxy's addresses."""
+        if not getattr(self.server, 'public', False):
+            return True
+        try:
+            ip = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return False
+        ip = getattr(ip, 'ipv4_mapped', None) or ip
+        return ip.is_loopback or any(ip in net for net in self.allow_from)
+
+    def cookie_token(self):
+        jar = http.cookies.SimpleCookie()
+        try:
+            jar.load(self.headers.get('Cookie') or '')
+        except http.cookies.CookieError:
+            return ''
+        return jar[COOKIE].value if COOKIE in jar else ''
+
+    def authenticate(self, q):
+        """(ok, by_cookie). A header or ?token= is shown deliberately; the cookie is sent by the browser on its own."""
+        for given, by_cookie in ((self.headers.get('X-Token') or '', False), (self.arg(q, 'token', '') or '', False),
+                                 (self.cookie_token(), True)):
+            if given:
+                return secrets.compare_digest(given.encode(), self.token.encode()), by_cookie
+        return False, False
+
+    def same_origin(self):
+        origin = self.headers.get('Origin')
+        if not origin:
+            return True
+        return urllib.parse.urlparse(origin).netloc == (self.headers.get('X-Forwarded-Host') or self.headers.get('Host') or '')
+
+    def prefix(self):
+        p = self.headers.get('X-Forwarded-Prefix') or '/'
+        if not re.fullmatch(r'/[A-Za-z0-9_./-]*', p) or '..' in p:
+            return '/'
+        return p.rstrip('/') + '/'
+
+    def send_signin(self, code=200, error=''):
+        msg = f'<p class="err" role="alert">{html.escape(error)}</p>' if error else ''
+        self.send(code, SIGNIN_PAGE.replace('__ERROR__', msg).encode(), 'text/html; charset=utf-8')
+
+    def post_signin(self):
+        n = int(self.headers.get('Content-Length') or 0)
+        form = urllib.parse.parse_qs(self.rfile.read(min(n, 4096)).decode('utf-8', 'replace')) if n else {}
+        given = (form.get('token') or [''])[0].strip()
+        if not given or not secrets.compare_digest(given.encode(), self.token.encode()):
+            time.sleep(1)
+            return self.send_signin(403, 'That token is not right.')
+        secure = '; Secure' if (self.headers.get('X-Forwarded-Proto') or '').lower() == 'https' else ''
+        self._extra_headers = [('Set-Cookie', f'{COOKIE}={self.token}; Path={self.prefix()}; Max-Age=2592000; '
+                                              f'HttpOnly; SameSite=Strict{secure}'), ('Location', './')]
+        self.send(303, b'', 'text/plain')
+
     def dispatch(self, method):
+        self._extra_headers = []
+        if not self.peer_allowed():
+            return self.send(403, {'error': 'connections from this address are not accepted'})
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
-        supplied = self.headers.get('X-Token') or self.arg(q, 'token', '')
-        if not secrets.compare_digest(supplied, self.token):
-            return self.send(403, {'error': 'missing or wrong access token (header X-Token or ?token=); it is in ~/.smartex_token'})
+        if url.path == '/login':
+            return self.post_signin() if method == 'post' else self.send_signin()
+        ok, by_cookie = self.authenticate(q)
+        if not ok:
+            if method == 'get' and url.path in ('/', '/index.html'):
+                return self.send_signin()
+            return self.send(403, {'error': 'missing or wrong access token (header X-Token, ?token=, or sign in at /login); it is in ~/.smartex_token'})
+        if by_cookie and method == 'post' and not (self.headers.get('X-Client') and self.same_origin()):
+            return self.send(403, {'error': 'refused: a signed-in browser request must come from the smartex page itself'})
         name = f'{method}_{url.path.strip("/").replace("/", "_") or "index"}'
         route = getattr(self, name, None)
         if route is None:
@@ -702,7 +814,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def get_api_help(self, q):
         self.send(200, dict(
             name='smartex', version=VERSION,
-            auth='send header X-Token: <token from ~/.smartex_token>; name yourself with X-Client: agent:<name>',
+            auth='send header X-Token: <token from ~/.smartex_token>; name yourself with X-Client: agent:<name>. '
+                 'Browsers sign in at /login, which sets a cookie.',
             conventions=['paths are relative to the project folder', 'project may be omitted when only one is served',
                          'writes return the new sha; pass base_sha to avoid overwriting someone else\'s change',
                          'every write is versioned (GET /api/history) and announced on GET /api/events',
@@ -1031,7 +1144,22 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--root', action='append', required=True, help='project folder (repeat for several)')
     ap.add_argument('--port', type=int, default=8765)
+    ap.add_argument('--public', metavar='HOST:PORT', help='a second listener for a reverse proxy, e.g. 0.0.0.0:5005')
+    ap.add_argument('--allow-from', action='append', default=[], metavar='ADDR',
+                    help='address or network the public listener accepts (repeat); the loopback is always accepted')
     args = ap.parse_args()
+    public = None
+    if args.public:
+        host, _, port = args.public.rpartition(':')
+        if not host or not port.isdigit():
+            sys.exit('--public needs HOST:PORT, for example 0.0.0.0:5005')
+        if not args.allow_from:
+            sys.exit('--public needs at least one --allow-from (the address your reverse proxy connects from)')
+        try:
+            Handler.allow_from = [ipaddress.ip_network(a, strict=False) for a in args.allow_from]
+        except ValueError as e:
+            sys.exit(f'--allow-from: {e}')
+        public = (host, int(port))
     projects = {}
     for r in args.root:
         p = Project(Path(r).expanduser())
@@ -1051,12 +1179,19 @@ def main():
         token_file.chmod(0o600)
     Handler.projects, Handler.token, Handler.port = projects, token, args.port
     srv = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
-    srv.daemon_threads = True
+    srv.daemon_threads, srv.public = True, False
+    if public:
+        psrv = http.server.ThreadingHTTPServer(public, Handler)
+        psrv.daemon_threads, psrv.public = True, True
+        threading.Thread(target=psrv.serve_forever, daemon=True).start()
     import atexit
     import signal
     atexit.register(lambda: [a.stop() for a in AGENTS.values()])
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so atexit runs on `smartex.sh stop`
     print(f'smartex {VERSION} serving {", ".join(projects)} on 127.0.0.1:{args.port}', flush=True)
+    if public:
+        print(f'also listening on {public[0]}:{public[1]} for a reverse proxy; accepting the loopback and '
+              f'{", ".join(str(n) for n in Handler.allow_from)}', flush=True)
     print(f'open: http://localhost:{args.port}/?token={token}', flush=True)
     srv.serve_forever()
 

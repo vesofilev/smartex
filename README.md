@@ -86,11 +86,52 @@ ssh -N -L 8765:127.0.0.1:8765 you@server
 `./smartex.sh stop` stops the server and `./smartex.sh status` shows whether it runs. Several projects
 can be served at once: `./smartex.sh start ~/papers/a ~/papers/b`.
 
+## Behind a reverse proxy (no tunnel)
+
+If an nginx you control can reach the server, smartex can be served at a sub-path such as
+`https://example.org/smartex/`, with no SSH tunnel. smartex then opens a second listener that accepts
+connections only from the proxy's address, and the browser signs in once with the access token. The token
+goes in a form, never in an address, so it does not end up in logs; the sign-in sets an HttpOnly,
+SameSite=Strict cookie, marked Secure over https and scoped to the sub-path.
+
+Put the settings in `~/.smartex.env` on the server, so every `./smartex.sh start` uses them:
+
+```sh
+SMARTEX_PUBLIC=0.0.0.0:5005            # the port the proxy connects to
+SMARTEX_ALLOW_FROM="192.0.2.10"        # the address the proxy's connections arrive from
+SMARTEX_PUBLIC_URL=https://example.org/smartex/
+```
+
+and add this to the nginx server block:
+
+```nginx
+location /smartex/ {
+    proxy_set_header Host               $host;
+    proxy_set_header X-Real-IP          $remote_addr;
+    proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto  $scheme;
+    proxy_set_header X-Forwarded-Prefix /smartex;
+    proxy_read_timeout                  300;    # compiles and the change feed take a while
+    proxy_buffering                     off;
+    client_max_body_size                20m;    # saving a large file
+    proxy_pass                          http://SERVER:5005/;
+}
+location = /smartex {
+    return 301 /smartex/;
+}
+```
+
+The loopback listener, the tunnel, the CLI, the MCP server and the assistant keep working as before.
+Anyone who can reach the sub-path sees the sign-in page, so keep the token secret; it gives full access
+to the project and to the assistant.
+
 ## Security
 
-The server listens on 127.0.0.1 only, so it is reachable from other computers only through SSH. Every
-request must carry the access token stored in `~/.smartex_token` (mode 0600), because other users of
-the same machine can reach its local ports. Files outside the project folder cannot be read or written,
+The server listens on 127.0.0.1, so it is reachable from other computers only through SSH, unless you
+add the reverse-proxy listener above, which accepts only the addresses you name. Every request must carry
+the access token stored in `~/.smartex_token` (mode 0600), because other users of the same machine can
+reach its local ports. A browser signed in with the cookie can change things only from the smartex page
+itself: every POST needs the X-Client header and a same-origin Origin. Files outside the project folder cannot be read or written,
 and only text formats used by LaTeX projects can be edited.
 
 ## For AI agents

@@ -322,7 +322,9 @@ const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { ret
                 set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { 'X-Token': token, 'X-Client': CLIENT, 'Content-Type': 'application/json' } });
+  // relative paths, so the page also works under a reverse proxy's sub-path (https://host/smartex/)
+  const r = await fetch(path.replace(/^\//, ''), { ...opts, headers: { ...(token ? { 'X-Token': token } : {}),
+                                                                    'X-Client': CLIENT, 'Content-Type': 'application/json' } });
   const isJson = (r.headers.get('content-type') || '').includes('json');
   const data = isJson ? await r.json() : null;
   if (!r.ok) { const e = new Error((data && data.error) || r.statusText); e.status = r.status; e.data = data; throw e; }
@@ -507,7 +509,7 @@ async function loadPages() {
     div.style.width = `${Math.round(width)}px`; div.style.height = `${Math.round(width * h / w)}px`;
     const img = document.createElement('img'); img.alt = `Page ${i + 1}`; img.loading = 'lazy'; img.draggable = false;
     const dpi = Math.max(60, Math.min(240, Math.round(width * dpr * 72 / w)));
-    img.src = '/api/pdf/page?' + q({ main: S.main, page: i + 1, dpi, token, v: info.mtime });
+    img.src = 'api/pdf/page?' + q({ main: S.main, page: i + 1, dpi, ...(token ? { token } : {}), v: info.mtime });
     const num = document.createElement('span'); num.className = 'num'; num.textContent = i + 1;
     const mk = document.createElement('div'); mk.className = 'marker';
     div.append(img, num, mk);
@@ -516,7 +518,7 @@ async function loadPages() {
   });
   $('pages').replaceChildren(frag);
   if (prevH > box.clientHeight) box.scrollTop = prevTop * (box.scrollHeight / prevH);   // keep the reader's place
-  $('openpdf').href = '/api/pdf?' + q({ main: S.main, token, v: info.mtime });
+  $('openpdf').href = 'api/pdf?' + q({ main: S.main, ...(token ? { token } : {}), v: info.mtime });
   $('zoomlevel').textContent = `${Math.round(P.zoom * 100)}%`;
   return true;
 }
@@ -851,9 +853,9 @@ document.addEventListener('keydown', ev => {
 window.addEventListener('beforeunload', ev => { if (anyDirty()) { ev.preventDefault(); ev.returnValue = ''; } });
 
 function fail(msg) { document.body.innerHTML = ''; const p = document.createElement('p'); p.style.padding = '28px'; p.textContent = msg; document.body.append(p); }
-if (!token) fail('This address needs its access token. Open the full URL smartex printed when it started; it ends in ?token=...');
-else loadProjects().catch(err => fail(err.status === 403
-  ? 'The access token in this address is wrong. Open the URL smartex printed when it started.'
+// The server only sends this page to a signed-in browser or with ?token=, so a 403 here means the sign-in expired.
+loadProjects().catch(err => fail(err.status === 403
+  ? 'Your sign-in is no longer valid. Reload the page to sign in again.'
   : 'Could not reach smartex: ' + err.message));
 </script>
 </body>
