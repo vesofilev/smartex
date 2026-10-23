@@ -454,16 +454,23 @@ async function openFile(path, line) {
 /* saving and conflicts */
 async function save(path = S.current, force = false) {
   const e = S.docs.get(path); if (!e) return true;
+  // one save per file at a time: a second save started meanwhile waits and then sends the new sha, instead of
+  // racing the first with the old one and getting a false "changed on disk" conflict
+  while (e.saving) await e.saving;
   if (!dirty(e) && !force) return true;
-  $('savestate').textContent = 'Saving';
-  try {
-    const content = e.doc.getValue(); const gen = e.doc.changeGeneration();
-    const r = await api('/api/file?' + q({ path }), { method: 'POST', body: JSON.stringify({ content, base_sha: e.sha, force }) });
-    e.sha = r.sha; e.clean = gen; renderState(); return true;
-  } catch (err) {
-    if (err.status === 409) { showConflict(path); return false; }
-    toast('Could not save ' + path + ': ' + err.message, 5000); renderState(); return false;
-  }
+  const run = (async () => {
+    $('savestate').textContent = 'Saving';
+    try {
+      const content = e.doc.getValue(); const gen = e.doc.changeGeneration();
+      const r = await api('/api/file?' + q({ path }), { method: 'POST', body: JSON.stringify({ content, base_sha: e.sha, force }) });
+      e.sha = r.sha; e.clean = gen; renderState(); return true;
+    } catch (err) {
+      if (err.status === 409) { showConflict(path); return false; }
+      toast('Could not save ' + path + ': ' + err.message, 5000); renderState(); return false;
+    }
+  })();
+  e.saving = run;
+  try { return await run; } finally { if (e.saving === run) e.saving = null; }
 }
 async function saveAll() { for (const p of S.docs.keys()) if (!(await save(p))) return false; return true; }
 function showConflict(path) { S.conflict = path; $('bannertext').textContent = path + ' changed on disk while you were editing it.'; $('banner').classList.add('show'); }
@@ -551,8 +558,9 @@ let resizeTimer; window.addEventListener('resize', () => { clearTimeout(resizeTi
 function showPdf(exists) { if (exists) loadPages(); else { $('pages').innerHTML = ''; $('nopdf').style.display = 'grid'; } }
 async function compile() {
   if (S.compiling) return;
-  if (!(await saveAll())) { toast('Resolve the file conflict before compiling', 4000); return; }
-  S.compiling = true; $('compile').disabled = true;
+  S.compiling = true;                     // before the first await, so a second trigger cannot start another compile
+  if (!(await saveAll())) { S.compiling = false; toast('Resolve the file conflict before compiling', 4000); return; }
+  $('compile').disabled = true;
   const strip = $('strip'); strip.className = 'busy'; $('result').textContent = 'Compiling'; $('detail').textContent = '';
   try {
     const r = await api('/api/compile?' + q(), { method: 'POST', body: JSON.stringify({ main: S.main }) });
@@ -778,7 +786,7 @@ async function loadAgentNow() {
     const t = await api('/api/agent/transcript?' + q({ since: -1 }));
     if (!t.entries.length) { const li = document.createElement('li'); li.className = 'empty';
       li.textContent = info.claude ? 'The assistant is a Claude Code session on the server. It keeps this conversation, sees what you are looking at, and makes its edits through smartex so you can watch and undo them.'
-                                   : 'Claude Code is not installed on the server, so the assistant is unavailable.'; $('chat').append(li); }
+                                   : 'smartex cannot find Claude Code on the server, so the assistant is unavailable. Restart smartex with SMARTEX_CLAUDE set to the full path of the claude command.'; $('chat').append(li); }
     for (const e of t.entries) { addEntry(e); A.last = e.index; }
     renderAgentState(); scrollChat();
   } catch (e) { /* assistant endpoints unavailable */ }
@@ -846,8 +854,9 @@ $('newfile').onclick = async () => {
 };
 document.addEventListener('keydown', ev => {
   const mod = ev.metaKey || ev.ctrlKey;
-  if (mod && ev.key === 's') { ev.preventDefault(); save(); }
-  if (mod && ev.key === 'Enter') { ev.preventDefault(); compile(); }
+  const inEditor = !!(ev.target.closest && ev.target.closest('.CodeMirror'));   // the editor's own keys already did it
+  if (mod && ev.key === 's') { ev.preventDefault(); if (!inEditor) save(); }
+  if (mod && ev.key === 'Enter') { ev.preventDefault(); if (!inEditor) compile(); }
   if (mod && (ev.key === 'j' || ev.key === 'J')) { ev.preventDefault(); if (A.tab !== 'paper') showTab('paper'); showCursorInPdf(); }
 });
 window.addEventListener('beforeunload', ev => { if (anyDirty()) { ev.preventDefault(); ev.returnValue = ''; } });

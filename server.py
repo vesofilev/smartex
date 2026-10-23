@@ -45,7 +45,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
@@ -483,7 +483,8 @@ class Agent:
                 return
             exe = claude_binary()
             if not exe:
-                raise ApiError(501, 'Claude Code (the claude command) was not found; install it or set SMARTEX_CLAUDE')
+                raise ApiError(501, 'smartex cannot find Claude Code (the claude command) on this server. Install it, or '
+                                    'restart smartex with SMARTEX_CLAUDE set to its full path.')
             if model:
                 self.model_req = model
             self.dir.mkdir(parents=True, exist_ok=True)
@@ -505,6 +506,7 @@ class Agent:
                 cmd += ['--resume', self.session_id]
             # the owner's Claude Code login by default; an explicit SMARTEX_AGENT_API_KEY (for shared setups) overrides it
             env = {k: v for k, v in os.environ.items() if k != 'ANTHROPIC_API_KEY'}
+            env['PATH'] = agent_path(exe)
             if os.environ.get('SMARTEX_AGENT_API_KEY'):
                 env['ANTHROPIC_API_KEY'] = os.environ['SMARTEX_AGENT_API_KEY']
             self.proc = subprocess.Popen(cmd, cwd=self.p.root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -610,7 +612,25 @@ def tool_result_text(content):
 
 
 def claude_binary():
-    return os.environ.get('SMARTEX_CLAUDE') or shutil.which('claude')
+    """SMARTEX_CLAUDE, else `claude` on PATH, else the usual install places. smartex may be started from a shell
+    with a bare PATH (a cron job, another agent's sandbox), so PATH alone is not enough."""
+    found = os.environ.get('SMARTEX_CLAUDE') or shutil.which('claude')
+    if found:
+        return found
+    home = Path.home()
+    nvm = sorted((home / '.nvm' / 'versions' / 'node').glob('v*/bin/claude'),
+                 key=lambda f: [int(x) if x.isdigit() else 0 for x in f.parts[-3].lstrip('v').split('.')], reverse=True)
+    for f in [home / '.local/bin/claude', home / '.claude/local/claude', *nvm, home / '.npm-global/bin/claude',
+              home / '.bun/bin/claude', Path('/usr/local/bin/claude'), Path('/opt/homebrew/bin/claude')]:
+        if f.is_file() and os.access(f, os.X_OK):
+            return str(f)
+    return None
+
+
+def agent_path(exe):
+    """PATH for the assistant: the folder of its claude, ~/.local/bin (where `fr` usually is), then smartex's own."""
+    dirs = [str(Path(exe).parent), str(Path.home() / '.local/bin')] + os.environ.get('PATH', '').split(os.pathsep)
+    return os.pathsep.join(dict.fromkeys(d for d in dirs if d))
 
 
 AGENTS = {}
@@ -675,6 +695,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         sys.stderr.write('%s %s %s\n' % (time.strftime('%H:%M:%S'), self.headers.get('X-Client', '-') if self.headers else '-', fmt % args))
+        sys.stderr.flush()       # Python 3.8 buffers a redirected stderr; keep the log current
 
     def send(self, code, body, ctype='application/json'):
         data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
@@ -1189,6 +1210,8 @@ def main():
     atexit.register(lambda: [a.stop() for a in AGENTS.values()])
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so atexit runs on `smartex.sh stop`
     print(f'smartex {VERSION} serving {", ".join(projects)} on 127.0.0.1:{args.port}', flush=True)
+    exe = claude_binary()
+    print(f'assistant: {exe}' if exe else 'assistant: unavailable, the claude command was not found (set SMARTEX_CLAUDE)', flush=True)
     if public:
         print(f'also listening on {public[0]}:{public[1]} for a reverse proxy; accepting the loopback and '
               f'{", ".join(str(n) for n in Handler.allow_from)}', flush=True)

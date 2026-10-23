@@ -22,6 +22,7 @@ case "${1:-}" in
     if [ -n "${SMARTEX_PUBLIC:-}" ]; then
       args+=(--public "$SMARTEX_PUBLIC"); for a in ${SMARTEX_ALLOW_FROM:-}; do args+=(--allow-from "$a"); done
     fi
+    [ -f "$LOG" ] && mv -f "$LOG" "$LOG.1"          # keep the previous run's log
     nohup python3 "$HERE/server.py" "${args[@]}" --port "$PORT" > "$LOG" 2>&1 &
     echo $! > "$PIDFILE"; sleep 1
     running && grep -m1 '^open:' "$LOG" | sed "s/^open: /started; open (through your SSH tunnel): /" || { echo "failed to start:"; cat "$LOG"; exit 1; } ;;

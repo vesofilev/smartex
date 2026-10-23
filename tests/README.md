@@ -21,6 +21,7 @@ URL="http://127.0.0.1:8765/?token=$(cat ~/.smartex_token)"
 ~/.venvs/uitest/bin/python tests/ui_sync.py "$URL" /tmp/shots     # forward/inverse SyncTeX, Cmd-J, zoom
 ~/.venvs/uitest/bin/python tests/ui_assistant.py "$URL" /tmp/shots   # Assistant tab: no doubled messages
 ~/.venvs/uitest/bin/python tests/ui_assistant_steps.py "$URL" /tmp/shots   # live steps, clickable status
+~/.venvs/uitest/bin/python tests/ui_keys.py "$URL" /tmp/shots    # Ctrl-S / Ctrl-Enter: one save, one compile, no false conflict
 ~/.venvs/uitest/bin/python tests/ui_proxy.py http://127.0.0.1:PUBLIC_PORT /tmp/shots [IP]   # behind a reverse proxy: sign-in, cookie, refusals
 
 For the assistant test, start the server with the stand-in Claude so no usage is spent:
