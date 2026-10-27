@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from smartex_client import Client, SmartexError  # noqa: E402
 
-SERVER_INFO = {'name': 'smartex', 'version': '0.2.0'}
+SERVER_INFO = {'name': 'smartex', 'version': '0.3.0'}
 
 
 def S(props, required=()):
@@ -32,6 +32,12 @@ EDITS = {'type': 'array', 'items': {'type': 'object', 'properties': {'old': STR,
 TOOLS = [
     ('list_projects', 'List the LaTeX projects this workspace serves and their main files.', S({}),
      lambda c, a: c.projects()),
+    ('create_project', 'Create a new, empty project (a folder in the workspace\'s projects folder) when the person asks '
+     'for one. Then work in it by passing its name as "project" to the other tools, starting with create_file for its '
+     'main .tex file.',
+     {'type': 'object', 'properties': {'name': {'type': 'string', 'description': '1 to 64 letters, digits, ".", "_" or "-"'}},
+      'required': ['name'], 'additionalProperties': False},
+     lambda c, a: c.create_project(a['name'])),
     ('list_files', 'List editable files (path, size, mtime, sha), the main .tex file, and whether a PDF exists.', S({}),
      lambda c, a: c.files()),
     ('read_file', 'Read a file, optionally a 1-based inclusive line range, optionally with line numbers. '

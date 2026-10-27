@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
 # Start, stop or inspect the smartex server.
-#   ./smartex.sh start DIR [DIR ...]   serve these LaTeX project folders (default port 8765, or $SMARTEX_PORT)
+#   ./smartex.sh start [DIR ...]       serve these LaTeX project folders and the ones served before (default
+#                                      port 8765, or $SMARTEX_PORT); the list is kept in ~/.smartex_projects
 #   ./smartex.sh stop | status | url
 # Settings can live in ~/.smartex.env (shell syntax), so restarts keep them:
 #   SMARTEX_PORT=8765                      the loopback port (SSH tunnel, CLI, MCP)
 #   SMARTEX_PUBLIC=0.0.0.0:5005            optional second listener for a reverse proxy such as nginx
 #   SMARTEX_ALLOW_FROM="192.0.2.10"        addresses or networks that listener accepts (space separated)
 #   SMARTEX_PUBLIC_URL=https://host/smartex/   where the proxy serves it, for `url` to print
+#   SMARTEX_PROJECTS_DIR=~/papers          where the New project button makes folders (default ~/smartex-projects)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$HOME/.smartex.env" ] && . "$HOME/.smartex.env"
 PORT="${SMARTEX_PORT:-8765}"
 PIDFILE="$HOME/.smartex.pid"
 LOG="$HOME/.smartex.log"
+REGISTRY="$HOME/.smartex_projects"
 running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 case "${1:-}" in
   start)
-    shift; [ $# -ge 1 ] || { echo "usage: $0 start DIR [DIR ...]"; exit 1; }
+    shift
+    [ $# -ge 1 ] || grep -qv '^#' "$REGISTRY" 2>/dev/null || { echo "usage: $0 start DIR [DIR ...]   (no projects in $REGISTRY yet)"; exit 1; }
     running && { echo "already running (pid $(cat "$PIDFILE"))"; exit 0; }
-    args=(); for d in "$@"; do args+=(--root "$d"); done
+    args=(--registry "$REGISTRY"); for d in "$@"; do args+=(--root "$d"); done
+    [ -n "${SMARTEX_PROJECTS_DIR:-}" ] && args+=(--projects-dir "$SMARTEX_PROJECTS_DIR")
     if [ -n "${SMARTEX_PUBLIC:-}" ]; then
       args+=(--public "$SMARTEX_PUBLIC"); for a in ${SMARTEX_ALLOW_FROM:-}; do args+=(--allow-from "$a"); done
     fi

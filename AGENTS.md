@@ -6,7 +6,8 @@ attributed to you, versioned, and shown to the people working in the editor as i
 
 ## Connecting
 
-The server must be running (`./smartex.sh start PROJECT_DIR`). Then pick one:
+The server must be running (`./smartex.sh start PROJECT_DIR`, or `./smartex.sh start` for the projects it
+served before). Then pick one:
 
 - **MCP** (preferred): `claude mcp add smartex -- python3 /path/to/smartex_mcp.py --client agent:<your-name>`
 - **CLI**: `./smartex <command>`; run `./smartex -h` for the list. Structured output is JSON.
@@ -36,7 +37,9 @@ Configuration: `SMARTEX_URL` (default `http://127.0.0.1:8765`), `SMARTEX_TOKEN` 
 6. **Show, don't hunt.** `open_in_editor` scrolls the person's editor to a line, with a short message.
 7. **Wait instead of polling.** `wait_for_events(since=last_seq, timeout=30)` returns as soon as someone
    saves, compiles or comments. Start with `since=0` and keep the returned `last_seq`.
-8. **Undo is always possible.** `file_history` lists earlier versions with who overwrote each one;
+8. **New projects only on request.** When the person asks for one, `create_project` makes an empty folder
+   and serves it; then pass its name as `project` to the other tools, starting with `create_file`.
+9. **Undo is always possible.** `file_history` lists earlier versions with who overwrote each one;
    `restore_version` brings one back. Deleted files can be restored the same way.
 
 ## Operations
@@ -44,6 +47,7 @@ Configuration: `SMARTEX_URL` (default `http://127.0.0.1:8765`), `SMARTEX_TOKEN` 
 | goal | MCP tool | CLI | HTTP |
 |---|---|---|---|
 | list projects | `list_projects` | `projects` | `GET /api/projects` |
+| new, empty project | `create_project` | `new-project NAME` | `POST /api/projects` |
 | list files | `list_files` | `files` | `GET /api/files` |
 | read | `read_file` | `cat FILE [--start --end --numbered]` | `GET /api/file` |
 | exact edit | `edit_file` | `edit FILE --old A --new B [--base SHA]` | `POST /api/edit` |
@@ -71,5 +75,5 @@ compile-and-fix loop while you do something else.
 ## Errors
 
 Errors are JSON objects with an `error` message and an HTTP status: 400 bad request, 403 forbidden
-(token, path outside the project, file type), 404 not found, 409 conflict (stale `base_sha` or file
-exists), 422 edit text not found or not unique, 501 optional tool missing on the server.
+(token, path outside the project, file type), 404 not found, 409 conflict (stale `base_sha`, file
+exists, or project name taken), 422 edit text not found or not unique, 501 optional tool missing on the server.

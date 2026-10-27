@@ -64,6 +64,9 @@ class Client:
     def projects(self):
         return self.request('GET', '/api/projects')
 
+    def create_project(self, name):
+        return self.request('POST', '/api/projects', body={'name': name})
+
     def files(self):
         return self.request('GET', '/api/files')
 

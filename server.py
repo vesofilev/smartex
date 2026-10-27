@@ -2,6 +2,7 @@
 """smartex server: a LaTeX workspace that people and AI agents share.
 
     python3 server.py --root DIR [--root DIR ...] [--port 8765] [--public HOST:PORT --allow-from ADDR ...]
+                      [--projects-dir DIR] [--registry FILE]
 
 People use the browser editor (index.html). Agents use the same JSON API, either directly, through the
 `smartex` command-line client, or through the MCP server (`smartex_mcp.py`). GET /api/help describes
@@ -10,6 +11,10 @@ or through a reverse proxy (see "Behind a reverse proxy" in README.md). Every re
 access token from ~/.smartex_token: header X-Token, ?token=, or the sign-in cookie that the sign-in page
 sets. Requests should name their author in the X-Client header (for example "human:browser" or
 "agent:claude-code"): every write is attributed, versioned and announced on the event feed.
+
+New projects (the New project button, POST /api/projects, the create_project tool) are empty folders made
+in --projects-dir (default ~/smartex-projects). With --registry FILE the server also serves every folder
+listed in FILE (one per line) and adds to it each folder it serves, so created projects survive a restart.
 
 --public HOST:PORT opens a second listener for a reverse proxy such as nginx. It accepts connections only
 from this machine and from the --allow-from addresses or networks (at least one is required). The proxy
@@ -45,11 +50,14 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = '0.4.1'
+VERSION = '0.5.0'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
 COOKIE = 'smartex_token'
+PROJECT_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
+REGISTRY_HEADER = ('# Projects that smartex serves, one folder per line (smartex.sh start adds to it; so does creating a\n'
+                   '# project). Delete a line to stop serving that project; the folder itself is kept.\n')
 SIGNIN_PAGE = '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in to smartex</title>
@@ -397,6 +405,9 @@ The current directory is the project folder. Rules:
   the relevant line instead of editing. Use open_in_editor to point them to a location.
 - Each message may start with "[smartex context: ...]" saying which file, line and selection the person is
   looking at. Use it to resolve "this", "here", "the selected sentence".
+- If the person asks for a new project, make it with create_project, then work in it by passing its name as
+  "project" to the other tools (start with create_file for its main .tex file). Your current directory
+  stays this project's folder.
 - For the literature, the frontier CLI is available through Bash if installed: fr search, fr abs, fr toc,
   fr read, fr eq, fr bib.
 - Replies are shown in a narrow side panel: keep them short and concrete."""
@@ -649,6 +660,7 @@ ENDPOINTS = [
     # method, path, parameters, description
     ('GET', '/api/help', '', 'This catalogue.'),
     ('GET', '/api/projects', '', 'Projects served, with their main file.'),
+    ('POST', '/api/projects', 'body {name}', 'Create a new, empty project: a folder NAME (letters, digits, ".", "_", "-") in the projects folder (projects_dir in this catalogue). Every project\'s feed announces it as project_created.'),
     ('GET', '/api/files', 'project', 'Editable files with size, mtime and sha; the main file; whether a PDF exists.'),
     ('GET', '/api/file', 'project, path, [start, end (1-based lines)], [numbered=1]', 'Read a file (or a line range). Returns content, sha, total lines.'),
     ('POST', '/api/file', 'project, path; body {content, base_sha?, force?}', 'Create or overwrite a file. With base_sha, refuses (409) if the file changed since you read it.'),
@@ -682,7 +694,7 @@ ENDPOINTS = [
     ('POST', '/api/agent/config', 'project; body {model?, effort?}', 'Choose the model (alias such as opus, sonnet, haiku, fable, or a full name; empty for the default) and effort (low, medium, high, xhigh, max; empty for the default). A running assistant restarts and resumes the conversation.'),
     ('POST', '/api/agent/stop', 'project', 'Stop the assistant process; the conversation is kept and resumes with the next message.'),
     ('POST', '/api/agent/reset', 'project', 'Stop the assistant and start a new conversation next time (the old transcript is archived).'),
-    ('GET', '/api/events', 'project, [since=SEQ], [timeout=S <= 60]', 'Change feed (file_written, file_created, file_renamed, file_deleted, compile_started, compile_finished, note_added, note_resolved, ui_open, agent_status, agent_output). Blocks until something happens or timeout.'),
+    ('GET', '/api/events', 'project, [since=SEQ], [timeout=S <= 60]', 'Change feed (file_written, file_created, file_renamed, file_deleted, compile_started, compile_finished, note_added, note_resolved, ui_open, agent_status, agent_output, project_created). Blocks until something happens or timeout.'),
 ]
 
 
@@ -692,6 +704,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     token = ''
     port = 8765
     allow_from = []          # networks the public listener accepts, besides the loopback
+    projects_dir = Path.home() / 'smartex-projects'     # where new projects are made
+    registry = None          # file listing the project folders to serve on every start, if any
 
     def log_message(self, fmt, *args):
         sys.stderr.write('%s %s %s\n' % (time.strftime('%H:%M:%S'), self.headers.get('X-Client', '-') if self.headers else '-', fmt % args))
@@ -842,11 +856,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          'every write is versioned (GET /api/history) and announced on GET /api/events',
                          'to comment on a person\'s text without changing it, use POST /api/notes'],
             endpoints=[dict(method=m, path=p, params=a, description=d) for m, p, a, d in ENDPOINTS],
+            projects_dir=str(self.projects_dir),
             features=dict(pdf_text=bool(shutil.which('pdftotext')), pdf_page_images=bool(shutil.which('pdftoppm')),
-                          synctex=True, assistant=bool(claude_binary()))))
+                          synctex=True, assistant=bool(claude_binary()), new_projects=True)))
 
     def get_api_projects(self, q):
         self.send(200, [dict(name=p.name, main=p.main_file()) for p in self.projects.values()])
+
+    def post_api_projects(self, q):
+        p = create_project(str(self.body().get('name', '')).strip(), self.client)
+        self.send(200, dict(name=p.name, path=str(p.root), main=None))
 
     # ---- files ----
     def get_api_files(self, q):
@@ -1161,9 +1180,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send(200, dict(events=items, last_seq=last))
 
 
+# ---------------------------------------------------------------------------------------------------
+# new projects, and the registry that keeps them served after a restart
+# ---------------------------------------------------------------------------------------------------
+CREATE_LOCK = threading.Lock()
+
+
+def create_project(name, client):
+    """Make an empty project folder in the projects folder and serve it from now on."""
+    if not PROJECT_NAME.fullmatch(name):
+        raise ApiError(400, 'a project name is 1 to 64 letters, digits, ".", "_" or "-", starting with a letter or digit')
+    with CREATE_LOCK:
+        if name in Handler.projects:
+            raise ApiError(409, f'there is already a project called {name}')
+        folder = Handler.projects_dir / name
+        if folder.exists():
+            raise ApiError(409, f'{folder} already exists; choose another name')
+        Handler.projects_dir.mkdir(parents=True, exist_ok=True)
+        folder.mkdir()
+        p = Project(folder)
+        # a new dict rather than an insertion, so a request iterating the old one is not disturbed
+        Handler.projects = {**Handler.projects, name: p}
+        if Handler.registry:
+            remember(Handler.registry, [p.root])
+    for other in Handler.projects:
+        EVENTS.emit(other, 'project_created', name=name, path=str(p.root), client=client)
+    return p
+
+
+def registered(registry):
+    if not registry.exists():
+        return []
+    return [Path(l.strip()).expanduser() for l in registry.read_text().splitlines() if l.strip() and not l.lstrip().startswith('#')]
+
+
+def remember(registry, folders):
+    """Add folders to the registry, keeping the ones already in it."""
+    known = {f.resolve() for f in registered(registry)}
+    new = [str(f) for f in folders if f.resolve() not in known]
+    if new:
+        fresh = not registry.exists()
+        with open(registry, 'a') as fh:
+            fh.write((REGISTRY_HEADER if fresh else '') + ''.join(f + '\n' for f in new))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--root', action='append', required=True, help='project folder (repeat for several)')
+    ap.add_argument('--root', action='append', default=[], help='project folder (repeat for several)')
+    ap.add_argument('--projects-dir', default=os.environ.get('SMARTEX_PROJECTS_DIR') or str(Handler.projects_dir),
+                    help='where new projects are made (default ~/smartex-projects, or $SMARTEX_PROJECTS_DIR)')
+    ap.add_argument('--registry', metavar='FILE', help='also serve the folders listed in FILE, and record every served '
+                                                        'and newly created project folder there')
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--public', metavar='HOST:PORT', help='a second listener for a reverse proxy, e.g. 0.0.0.0:5005')
     ap.add_argument('--allow-from', action='append', default=[], metavar='ADDR',
@@ -1181,16 +1248,32 @@ def main():
         except ValueError as e:
             sys.exit(f'--allow-from: {e}')
         public = (host, int(port))
-    projects = {}
+    roots = []
     for r in args.root:
-        p = Project(Path(r).expanduser())
-        if not p.root.is_dir():
+        if not Path(r).expanduser().is_dir():
             sys.exit(f'not a folder: {r}')
+        roots.append(Path(r).expanduser().resolve())
+    registry = Path(args.registry).expanduser() if args.registry else None
+    if registry:
+        for r in registered(registry):
+            if r.is_dir():
+                roots.append(r.resolve())
+            else:
+                print(f'skipping {r} (listed in {registry}): not a folder', flush=True)
+    roots = list(dict.fromkeys(roots))
+    if not roots:
+        sys.exit('no projects to serve: give --root DIR' + (f', or list folders in {registry}' if registry else ''))
+    projects = {}
+    for r in roots:
+        p = Project(r)
         name, k = p.name, 2
         while name in projects:
             name, k = f'{p.name}-{k}', k + 1
         p.name = name
         projects[name] = p
+    if registry:
+        remember(registry, roots)
+    Handler.registry, Handler.projects_dir = registry, Path(args.projects_dir).expanduser().resolve()
     token_file = Path.home() / '.smartex_token'
     if token_file.exists() and token_file.stat().st_mode & 0o077 == 0:
         token = token_file.read_text().strip()
@@ -1210,6 +1293,8 @@ def main():
     atexit.register(lambda: [a.stop() for a in AGENTS.values()])
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so atexit runs on `smartex.sh stop`
     print(f'smartex {VERSION} serving {", ".join(projects)} on 127.0.0.1:{args.port}', flush=True)
+    print(f'new projects go to {Handler.projects_dir}' + (f'; the list of projects is kept in {registry}' if registry else ''),
+          flush=True)
     exe = claude_binary()
     print(f'assistant: {exe}' if exe else 'assistant: unavailable, the claude command was not found (set SMARTEX_CLAUDE)', flush=True)
     if public:

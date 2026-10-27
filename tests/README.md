@@ -23,6 +23,10 @@ URL="http://127.0.0.1:8765/?token=$(cat ~/.smartex_token)"
 ~/.venvs/uitest/bin/python tests/ui_assistant_steps.py "$URL" /tmp/shots   # live steps, clickable status
 ~/.venvs/uitest/bin/python tests/ui_keys.py "$URL" /tmp/shots    # Ctrl-S / Ctrl-Enter: one save, one compile, no false conflict
 ~/.venvs/uitest/bin/python tests/ui_proxy.py http://127.0.0.1:PUBLIC_PORT /tmp/shots [IP]   # behind a reverse proxy: sign-in, cookie, refusals
+~/.venvs/uitest/bin/python tests/ui_projects.py "$URL" /tmp/shots ./smartex [REGISTRY]   # New project button, API checks, CLI, MCP tool, registry
+
+For the projects test, start the server with scratch folders: `python3 server.py --root COPY --port 8799
+--projects-dir /tmp/new --registry /tmp/registry.txt`. The other tests assume a single served project.
 
 For the assistant test, start the server with the stand-in Claude so no usage is spent:
 `SMARTEX_CLAUDE=$PWD/tests/fake_claude.py ./smartex.sh start /tmp/scratch-copy-of-a-paper`.

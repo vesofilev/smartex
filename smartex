@@ -7,6 +7,7 @@ Configuration: SMARTEX_URL, SMARTEX_TOKEN (or ~/.smartex_token), SMARTEX_CLIENT,
 
 Examples
   smartex files
+  smartex new-project notes_free_fields   # a new, empty project
   smartex cat main.tex --start 40 --end 80 --numbered
   smartex edit main.tex --old 'vaccum' --new 'vacuum'
   smartex compile && smartex pdf-page 2 -o page2.png
@@ -44,6 +45,7 @@ def main():
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('help', help='the server\'s endpoint catalogue')
     sub.add_parser('projects', help='projects being served')
+    p = sub.add_parser('new-project', help='create a new, empty project in the server\'s projects folder'); p.add_argument('name')
     sub.add_parser('files', help='editable files with sha, the main file, PDF status')
     p = sub.add_parser('cat', help='print a file or a line range')
     p.add_argument('path'), p.add_argument('--start', type=int), p.add_argument('--end', type=int)
@@ -92,6 +94,7 @@ def main():
     try:
         if a.cmd == 'help': out(c.help())
         elif a.cmd == 'projects': out(c.projects())
+        elif a.cmd == 'new-project': out(c.create_project(a.name))
         elif a.cmd == 'files': out(c.files())
         elif a.cmd == 'cat':
             r = c.read(a.path, a.start, a.end, a.numbered)

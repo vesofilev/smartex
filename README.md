@@ -18,6 +18,7 @@ For people (browser):
   and clicking a spot on the paper jumps to its source line
 - Two themes: a blackboard and a light paper theme
 - See agent changes as they happen: open files reload, review notes appear in the margin
+- Start a new project with the New project button; the assistant can make one too
 
 For agents (API, CLI, MCP):
 - Read files or line ranges, search the project, change files by exact find-and-replace
@@ -84,7 +85,26 @@ ssh -N -L 8765:127.0.0.1:8765 you@server
 ```
 
 `./smartex.sh stop` stops the server and `./smartex.sh status` shows whether it runs. Several projects
-can be served at once: `./smartex.sh start ~/papers/a ~/papers/b`.
+can be served at once: `./smartex.sh start ~/papers/a ~/papers/b`. The folders are remembered in
+`~/.smartex_projects`, so a later `./smartex.sh start` with no folders serves them all again.
+
+## New projects
+
+The **New project** button next to the project menu asks for a name and makes an empty folder of that name,
+then switches to it; add the first file with **New file**. Other open editors get the new project in their
+menu right away. The folder goes in `~/smartex-projects`, or wherever `SMARTEX_PROJECTS_DIR` in
+`~/.smartex.env` points:
+
+```sh
+SMARTEX_PROJECTS_DIR=~/research
+```
+
+Agents can do the same: the assistant has a `create_project` tool (so "start a new project for my notes on
+free fields" works), and scripts can run `./smartex new-project NAME` or `POST /api/projects`. Names are
+letters, digits, `.`, `_` and `-`, and an existing folder is never reused.
+
+Every new project is added to `~/.smartex_projects`, so it is served again after a restart. To stop serving
+a project, delete its line there and restart; the folder itself is kept.
 
 ## Behind a reverse proxy (no tunnel)
 

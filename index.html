@@ -75,6 +75,7 @@ aside li.main-file { font-weight: 600; }
 #outline li { font-family: "Atkinson Hyperlegible", sans-serif; font-size: 13.5px; }
 #outline li.l2 { padding-left: 30px; } #outline li.l3 { padding-left: 44px; font-size: 13px; }
 #outline .empty { color: var(--faded); cursor: default; font-size: 13px; }
+#files .empty { color: var(--faded); cursor: default; font: 13px "Atkinson Hyperlegible", sans-serif; white-space: normal; }
 aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
 #notes li { white-space: normal; font-family: "Atkinson Hyperlegible", sans-serif; font-size: 13.5px; line-height: 1.35;
   padding-top: 6px; padding-bottom: 6px; color: var(--chalk); }
@@ -221,7 +222,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
   text-decoration: none; background: transparent; cursor: pointer; }
 #strip .tools button:hover, #strip .tools a:hover { color: var(--chalk); border-color: var(--chalk-soft); }
 #zoomlevel { font: 12px "JetBrains Mono", monospace; color: var(--faded); min-width: 3.5em; text-align: center; }
-#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--chalk); color: var(--board);
+#toast { position: fixed; z-index: 20; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--chalk); color: var(--board);
   padding: 9px 15px; border-radius: 7px; font-size: 14px; display: none; max-width: 90vw; box-shadow: var(--sheet-shadow); }
 #toast.show { display: block; }
 
@@ -243,6 +244,7 @@ aside .new { margin: 8px 16px; align-self: flex-start; font-size: 14px; }
     smartex
   </span>
   <select id="project" aria-label="Project"></select>
+  <button id="newproject" title="Create a new, empty project">New project</button>
   <span id="current"></span>
   <span id="savestate"></span>
   <button id="theme" role="switch" aria-checked="true" title="Dark mode on or off">
@@ -402,13 +404,26 @@ function renderOutline() {
 }
 
 /* projects and files */
-async function loadProjects() {
-  const projects = await api('/api/projects');
+function fillProjects(projects, value) {
   const sel = $('project'); sel.innerHTML = '';
   for (const p of projects) { const o = document.createElement('option'); o.value = o.textContent = p.name; sel.append(o); }
+  sel.value = value;
+}
+async function loadProjects() {
+  const projects = await api('/api/projects');
   const saved = store.get('smartex.project');
-  sel.value = projects.some(p => p.name === saved) ? saved : projects[0].name;
-  await switchProject(sel.value);
+  fillProjects(projects, projects.some(p => p.name === saved) ? saved : projects[0].name);
+  await switchProject($('project').value);
+}
+async function newProject() {
+  const name = (prompt('Name of the new project, for example notes_free_fields') || '').trim();
+  if (!name) return;
+  let r;
+  try { r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }); }
+  catch (err) { toast('Could not create the project: ' + err.message, 6000); return; }
+  fillProjects(await api('/api/projects'), S.project);
+  $('project').value = r.name; await switchProject(r.name);
+  if (S.project === r.name) toast(`Created ${r.name} in ${r.path.replace(/\/[^/]+$/, '')}. Add a file with New file.`, 6000);
 }
 
 async function switchProject(name) {
@@ -417,6 +432,10 @@ async function switchProject(name) {
   await refreshFiles();
   await refreshNotes();
   if (S.main) await openFile(S.main);
+  else {      // nothing to open: show an empty, locked editor rather than the previous project's file
+    editor.swapDoc(CodeMirror.Doc('')); editor.setOption('readOnly', 'nocursor');
+    renderState(); renderOutline(); renderNoteMarks(); $('pos').textContent = '';
+  }
   showPdf(S.hasPdf);
   loadAgent();
   startEvents();
@@ -432,6 +451,7 @@ async function refreshFiles() {
     li.onclick = () => openFile(f); li.onkeydown = ev => { if (ev.key === 'Enter') openFile(f); };
     ul.append(li);
   }
+  if (!S.files.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'No files yet. Create one with New file.'; ul.append(li); }
   renderState();
 }
 
@@ -442,7 +462,7 @@ async function openFile(path, line) {
     const doc = CodeMirror.Doc(r.content, tex ? 'stex' : 'text/plain');
     S.docs.set(path, { doc, sha: r.sha, clean: doc.changeGeneration() });
   }
-  S.current = path; editor.swapDoc(S.docs.get(path).doc);
+  S.current = path; editor.swapDoc(S.docs.get(path).doc); editor.setOption('readOnly', false);
   if (line) {
     const l = Math.max(0, line - 1); editor.setCursor({ line: l, ch: 0 }); editor.scrollIntoView({ line: l, ch: 0 }, 120);
     const h = editor.addLineClass(l, 'background', 'flash'); setTimeout(() => editor.removeLineClass(h, 'background', 'flash'), 1500);
@@ -658,6 +678,9 @@ async function handleEvent(ev) {
     if (ev.status === 'starting') A.model = null;          // a restart may bring a different model
     if (ev.status === 'ready' && !A.model) { try { A.model = (await api('/api/agent?' + q())).model; } catch (e) {} }
     renderAgentState();
+  } else if (ev.type === 'project_created') {
+    fillProjects(await api('/api/projects'), S.project);
+    if (!mine) toast(`${ev.client} created the project ${ev.name}`, 6000);
   } else if (ev.type === 'ui_open' && !mine) {
     await openFile(ev.path, ev.line); toast(ev.message ? `${ev.client}: ${ev.message}` : `${ev.client} opened ${ev.path}:${ev.line}`, 7000);
   }
@@ -846,6 +869,7 @@ $('agentnew').onclick = async () => { if (!confirm('Start a new conversation? Th
 $('save').onclick = () => save();
 $('compile').onclick = () => compile();
 $('project').onchange = ev => switchProject(ev.target.value);
+$('newproject').onclick = () => newProject();
 $('newfile').onclick = async () => {
   const name = prompt('Name of the new file, for example results.tex');
   if (!name) return;
