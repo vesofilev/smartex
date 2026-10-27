@@ -1,6 +1,6 @@
 # smartex
 
-A lightweight LaTeX workspace for projects that live on a remote machine, shared by people and AI agents.
+A lightweight LaTeX workspace shared by people and AI agents, for projects on a server or on your own computer.
 
 People get a browser editor with a live PDF preview. Agents get the same operations through a JSON API,
 a command-line tool and an MCP server. Both work on the same files with the same safety rules: every
@@ -8,6 +8,16 @@ change is attributed, versioned and announced, so a person can always see what a
 
 The server is a single Python file with no dependencies. The browser tab and the server together use a
 small fraction of the memory an IDE needs.
+
+## Make it yours
+
+smartex is meant to be changed by its users, and the easiest way is through your own AI agent. Give it
+this repository (for example, clone it and start Claude Code, Codex or another coding agent in the folder)
+and ask for what you want: a button you miss, another layout or theme, a different LaTeX engine, a setup
+that fits your machines. The code is small enough for an agent to read whole: one Python file for the
+server and one HTML file for the editor (see [Files](#files)). The browser tests in `tests/` let the agent
+check its changes, without spending any Claude usage (see `tests/README.md`). smartex itself was built
+this way, by Claude Code, one request at a time.
 
 ## What it does
 
