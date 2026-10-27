@@ -88,6 +88,29 @@ ssh -N -L 8765:127.0.0.1:8765 you@server
 can be served at once: `./smartex.sh start ~/papers/a ~/papers/b`. The folders are remembered in
 `~/.smartex_projects`, so a later `./smartex.sh start` with no folders serves them all again.
 
+## On your own computer
+
+smartex runs the same way on a laptop: start it there and open the address it prints, with no tunnel. The
+editor loads CodeMirror, KaTeX and its fonts from public CDNs, so the browser needs internet access.
+
+On Windows, use `smartex.ps1` in PowerShell instead of `smartex.sh`. It needs Python from python.org (the
+`py` launcher is found automatically), and TeX Live or MiKTeX with `latexmk`, which needs Perl (TeX Live
+includes it; for MiKTeX install Strawberry Perl). For the assistant, install Claude Code and log in once.
+
+```powershell
+git clone https://github.com/vesofilev/smartex.git
+cd smartex
+.\smartex.ps1 start C:\Users\me\papers\my-paper     # prints the address to open
+.\smartex.ps1 stop        # also: status, url
+```
+
+If PowerShell refuses to run scripts, run it as `powershell -ExecutionPolicy Bypass -File .\smartex.ps1 start ...`,
+or allow local scripts once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. The settings file is
+`~\.smartex.env` (in your user folder), with the same `NAME=value` lines that `smartex.sh` reads, plus `SMARTEX_PYTHON`
+if the right Python is not found. The server's messages go to `~\.smartex.log` and its errors to
+`~\.smartex.err.log`. The command-line client runs as `python smartex ...`. When starting `server.py` by
+hand on Windows, use `python -X utf8 server.py ...`, so that files are read and written as UTF-8.
+
 ## New projects
 
 The **New project** button next to the project menu asks for a name and makes an empty folder of that name,
@@ -181,6 +204,7 @@ The HTTP API describes itself at `GET /api/help`.
 | `smartex_mcp.py` | MCP server (stdio) for AI agents |
 | `smartex_client.py` | Python client shared by the CLI and the MCP server |
 | `smartex.sh` | start, stop and inspect the server |
+| `smartex.ps1` | the same for Windows (PowerShell) |
 
 Per-project data (version history and review notes) is kept in a hidden `.smartex/` folder inside each
 project.

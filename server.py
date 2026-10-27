@@ -29,6 +29,7 @@ messages and resumes its saved conversation after a restart. It is meant for the
 the server runs under; see README.md.
 
 Standard library only. Optional extras: pdftotext and pdftoppm (poppler) enable PDF text and page images.
+On Windows, start it with `python -X utf8 server.py ...` (smartex.ps1 does this) so that files are UTF-8.
 """
 import argparse
 import gzip
@@ -50,7 +51,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-VERSION = '0.5.0'
+VERSION = '0.5.1'
 EDITABLE = {'.tex', '.bib', '.sty', '.cls', '.bst', '.md', '.txt', '.cfg'}
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', '.smartex'}
 HERE = Path(__file__).resolve().parent
@@ -88,10 +89,10 @@ SIGNIN_PAGE = '''<!doctype html>
   <button type="submit">Sign in</button>
 </form></body></html>
 '''
-# directories searched for latexmk before PATH: $SMARTEX_TEXBIN, a user-space TeX Live, MacTeX
+# directories searched for latexmk before PATH: $SMARTEX_TEXBIN, a user-space TeX Live, MacTeX, TeX Live on Windows
 TEXBINS = [Path(p) for p in (os.environ.get('SMARTEX_TEXBIN', ''),
                              str(Path.home() / 'texlive' / '2026' / 'bin' / 'x86_64-linux'),
-                             '/Library/TeX/texbin') if p]
+                             '/Library/TeX/texbin', 'C:/texlive/2026/bin/windows') if p]
 ERROR_RE = re.compile(r'^(?P<file>[^:\n]+\.(?:tex|sty|cls|bib|bbl)):(?P<line>\d+): (?P<msg>.+)$', re.M)
 WARN_RE = re.compile(r'^((?:LaTeX|Package \S+|Class \S+) Warning: .+?)(?:\n\n|\Z)', re.M | re.S)
 LINE_RE = re.compile(r'on input line (\d+)')
@@ -164,7 +165,7 @@ class Project:
         return target
 
     def rel(self, p):
-        return str(Path(p).resolve().relative_to(self.root))
+        return Path(p).resolve().relative_to(self.root).as_posix()     # '/' on Windows too
 
     def editable(self, target):
         if target.suffix not in EDITABLE:
@@ -178,7 +179,7 @@ class Project:
                 p = Path(dirpath) / fn
                 if p.suffix in EDITABLE:
                     st = p.stat()
-                    out.append(dict(path=str(p.relative_to(self.root)), size=st.st_size, mtime=int(st.st_mtime),
+                    out.append(dict(path=p.relative_to(self.root).as_posix(), size=st.st_size, mtime=int(st.st_mtime),
                                     sha=digest(p.read_bytes())))
         return out
 
@@ -261,8 +262,9 @@ class Project:
     def compile(self, main, client):
         main_path = self.main_path(main)
         env = dict(os.environ)
-        env['PATH'] = ':'.join([str(b) for b in TEXBINS if b.is_dir()] + [env.get('PATH', '')])
-        cmd = ['latexmk', '-pdf', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', main_path.name]
+        env['PATH'] = os.pathsep.join([str(b) for b in TEXBINS if b.is_dir()] + [env.get('PATH', '')])
+        # Windows looks programs up in smartex's own PATH, not in env['PATH'], so find latexmk here
+        cmd = [shutil.which('latexmk', path=env['PATH']) or 'latexmk', '-pdf', '-interaction=nonstopmode', '-file-line-error', '-synctex=1', main_path.name]
         # latexmk skips the run when the PDF looks up to date, so a PDF made elsewhere (or without SyncTeX)
         # would never get the SyncTeX data that cursor-following needs: force a run in that case
         pdf_now, sync_now = main_path.with_suffix('.pdf'), main_path.with_suffix('.synctex.gz')
@@ -632,7 +634,8 @@ def claude_binary():
     nvm = sorted((home / '.nvm' / 'versions' / 'node').glob('v*/bin/claude'),
                  key=lambda f: [int(x) if x.isdigit() else 0 for x in f.parts[-3].lstrip('v').split('.')], reverse=True)
     for f in [home / '.local/bin/claude', home / '.claude/local/claude', *nvm, home / '.npm-global/bin/claude',
-              home / '.bun/bin/claude', Path('/usr/local/bin/claude'), Path('/opt/homebrew/bin/claude')]:
+              home / '.bun/bin/claude', Path('/usr/local/bin/claude'), Path('/opt/homebrew/bin/claude'),
+              home / '.local/bin/claude.exe', Path(os.environ.get('APPDATA', home)) / 'npm' / 'claude.cmd']:   # Windows
         if f.is_file() and os.access(f, os.X_OK):
             return str(f)
     return None
@@ -1292,6 +1295,9 @@ def main():
     import signal
     atexit.register(lambda: [a.stop() for a in AGENTS.values()])
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so atexit runs on `smartex.sh stop`
+    if os.name == 'nt' and not sys.flags.utf8_mode:
+        print('warning: start Python with -X utf8 (smartex.ps1 does), otherwise files are read and written '
+              'in the Windows code page instead of UTF-8', flush=True)
     print(f'smartex {VERSION} serving {", ".join(projects)} on 127.0.0.1:{args.port}', flush=True)
     print(f'new projects go to {Handler.projects_dir}' + (f'; the list of projects is kept in {registry}' if registry else ''),
           flush=True)

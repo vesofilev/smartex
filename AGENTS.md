@@ -7,7 +7,7 @@ attributed to you, versioned, and shown to the people working in the editor as i
 ## Connecting
 
 The server must be running (`./smartex.sh start PROJECT_DIR`, or `./smartex.sh start` for the projects it
-served before). Then pick one:
+served before; on Windows `.\smartex.ps1 start ...`). Then pick one:
 
 - **MCP** (preferred): `claude mcp add smartex -- python3 /path/to/smartex_mcp.py --client agent:<your-name>`
 - **CLI**: `./smartex <command>`; run `./smartex -h` for the list. Structured output is JSON.

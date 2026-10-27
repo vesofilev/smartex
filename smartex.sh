@@ -11,7 +11,8 @@
 #   SMARTEX_PROJECTS_DIR=~/papers          where the New project button makes folders (default ~/smartex-projects)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$HOME/.smartex.env" ] && . "$HOME/.smartex.env"
+# set -a exports the settings, so the server also sees SMARTEX_TEXBIN, SMARTEX_CLAUDE and the like
+[ -f "$HOME/.smartex.env" ] && { set -a; . "$HOME/.smartex.env"; set +a; }
 PORT="${SMARTEX_PORT:-8765}"
 PIDFILE="$HOME/.smartex.pid"
 LOG="$HOME/.smartex.log"
